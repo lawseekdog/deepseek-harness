@@ -25,7 +25,7 @@ kind: "package-reference"
 <a id="use-this-package"></a>
 ## 使用本包
 
-当组合需要通过 pi-ai 的提供方目录、或通过 pi-ai 已安装目录未描述的网关路由模型请求时挂载本插件。`providers` 字典就是整个配置面：每个键都是请求用 `GenerateOptions.provider` 选择的提供方路由名。
+当组合需要通过 pi-ai 的提供方目录、或通过 pi-ai 已安装目录未描述的网关路由模型请求时挂载本插件。`providers` 字典声明模型路由：每个键都是请求用 `GenerateOptions.provider` 选择的提供方路由名。
 
 ### 何时选择
 
@@ -87,6 +87,15 @@ kind: "package-reference"
 | `retryPolicy` | normal，5 次重试 | 由 `dsh-llm-retry` 执行的提供方自有重试策略 |
 
 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-llm-pi-ai)是每个受支持字段及其 JSDoc 的穷尽式真源。
+
+<a id="observe-transport-metadata-for-selected-sessions"></a>
+### 观察指定 Session 的传输元数据
+
+`transportObservation` 默认省略或为 `null`。启用时必须提供 1–16 个互不重复的精确 `sessionIds`，以及 1 到 1048576 之间的 `maxFrameBytes`；不允许用通配符选择其他 Session。设置在每次适配器调用开始时固定，仅适用于 `openai-completions`。其他协议会报告不支持取证，并使用原传输实现。
+
+既有插件日志接收白名单请求编号响应头、HTTP 状态、字节与帧计数、finish/DONE/EOF 时间、取消与错误时间以及适配器完成状态。日志不接收请求正文、消息内容、凭据、原始错误文本或任意响应头。随机 `callId` 关联这些诊断记录；`httpRequest` 统计该适配器调用内部的 HTTP 调用次数，不是官方 Agent 尝试编号。记录不是模型输入或 Session 事件，也不证明业务结果。
+
+观察器保持 SDK 请求、字节数组、按需拉取、信号和异常不变。每个 HTTP 响应最多暂存一个有界 SSE 帧；超限帧仍原样传递，但不解析。缺少 EOF、未完整帧和日志输出失败均在元数据中明确保留。日志保留由部署配置负责；此设置不保证事后可检索，也不改变提供方的重试、超时或结束行为。
 
 ### 登录提供方
 

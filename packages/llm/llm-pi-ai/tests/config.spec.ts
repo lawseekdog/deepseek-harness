@@ -98,3 +98,29 @@ describe('request image policy bounds', () => {
     }).toThrow(message)
   })
 })
+describe('Session-scoped transport observation configuration', () => {
+  it('disables observation for omitted or explicit null settings', () => {
+    expect(Config({ providers: {} }).transportObservation).toBeUndefined()
+    expect(Config({ providers: {}, transportObservation: null }).transportObservation).toBeNull()
+    expect(() => { assertServiceable(Config({ providers: {} })) }).not.toThrow()
+  })
+
+  it('requires explicit bounds and exact, unique Session IDs when enabled', () => {
+    const valid = { sessionIds: ['session-exact'], maxFrameBytes: 4096 }
+    const config = Config({ providers: {}, transportObservation: valid })
+    expect(config.transportObservation).toEqual(valid)
+    expect(() => { assertServiceable(config) }).not.toThrow()
+    for (const invalid of [{}, { sessionIds: ['session-exact'] },
+      { ...valid, maxFrameBytes: 0 }, { ...valid, maxFrameBytes: 1048577 },
+      { ...valid, sessionIds: [] }, { ...valid, sessionIds: ['*'] },
+      { ...valid, sessionIds: ['session-exact', 'session-exact'] }]) {
+      expect(() => { assertServiceable(Config({ providers: {}, transportObservation: invalid } as unknown as Config)) }).toThrow()
+    }
+  })
+
+  it('rejects invalid frame bounds supplied through the typed configuration entry', () => {
+    expect(() => { assertServiceable({ providers: {}, transportObservation: {
+      sessionIds: ['session-exact'], maxFrameBytes: Number.NaN,
+    } }) }).toThrow('transportObservation.maxFrameBytes must be an integer from 1 to 1048576')
+  })
+})

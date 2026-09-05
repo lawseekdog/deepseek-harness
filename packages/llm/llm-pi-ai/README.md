@@ -25,7 +25,7 @@ English | [中文](README.zh.md)
 <a id="use-this-package"></a>
 ## Use this package
 
-Mount this plugin when a composition routes model requests through pi-ai's provider catalogs or through gateways that pi-ai's installed catalog does not describe. The `providers` dictionary is the whole configuration surface: each key is the provider route name a request selects with `GenerateOptions.provider`.
+Mount this plugin when a composition routes model requests through pi-ai's provider catalogs or through gateways that pi-ai's installed catalog does not describe. The `providers` dictionary declares model routes: each key is the provider route name a request selects with `GenerateOptions.provider`.
 
 ### When to choose it
 
@@ -87,6 +87,15 @@ Each profile may set a `retryPolicy`; omission uses normal mode with five retrie
 | `retryPolicy` | normal, 5 retries | Provider-owned retry policy executed by `dsh-llm-retry` |
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-llm-pi-ai) is the exhaustive source for every accepted field and its JSDoc.
+
+<a id="observe-transport-metadata-for-selected-sessions"></a>
+### Observe transport metadata for selected Sessions
+
+`transportObservation` is omitted or `null` by default. An enabled setting supplies 1–16 distinct exact `sessionIds` and `maxFrameBytes` from 1 to 1048576; no wildcard selects other Sessions. The setting is captured once per adapter call and applies only to `openai-completions`. Other protocols report that observation is unsupported and use their original transport.
+
+The existing plugin logger receives request-ID headers from an allowlist, HTTP status, byte and frame counts, finish/DONE/EOF timestamps, cancellation and error timing, and adapter completion. It receives no request body, message content, credentials, raw error text, or arbitrary headers. A random `callId` correlates these diagnostic records; `httpRequest` counts HTTP calls inside that adapter call and is not an official Agent attempt number. Records are not model input or Session events and do not establish a business result.
+
+The observer preserves the SDK request, byte arrays, pull-driven consumption, signal and errors. It retains at most one bounded SSE frame per HTTP response; oversized frames remain in the stream but are not parsed. Missing EOF, incomplete frames and sink failures remain explicit in metadata. Logger retention is deployment-owned, and this setting does not guarantee later retrieval or change provider retry, timeout, or terminal behavior.
 
 ### Sign in to a provider
 

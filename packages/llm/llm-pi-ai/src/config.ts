@@ -38,6 +38,7 @@ import type {
   PiAiReasoningEfforts,
 } from './catalog.ts'
 import { buildProvider, supportedProtocols } from './provider.ts'
+import type { TransportObservationConfig } from './transport-observation.ts'
 
 /** Default maximum idle interval while an adapter stream read is outstanding. */
 export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000
@@ -214,6 +215,8 @@ export interface ResolvedPiAiProviderProfile
 
 /** Plugin configuration: the provider routes this instance owns. */
 export interface Config {
+  /** Optional metadata logging for exact Sessions; absent by default and never sent to the model. */
+  transportObservation?: TransportObservationConfig | null
   /**
    * pi-ai provider routes, keyed by provider. An empty (or omitted) dict is
    * the dormant settings-driven posture: the adapter mounts with no routes
@@ -339,6 +342,10 @@ const profile = z.object({
 /** Runtime schema for {@link Config}. */
 export const Config: z<Config> = z.object({
   providers: z.dict(profile).default({}),
+  transportObservation: z.union([z.const(null), z.object({
+    sessionIds: z.array(z.string().required()).min(1).max(16).required(),
+    maxFrameBytes: z.number().step(1).min(1).max(1024 * 1024).required(),
+  })]),
 })
 
 /**
@@ -354,6 +361,17 @@ export const Config: z<Config> = z.object({
  * @throws Error naming the route and configuration entry that cannot be served.
  */
 export function assertServiceable(config: Config): void {
+  const observation = config.transportObservation
+  if (observation !== undefined && observation !== null) {
+    if (observation.sessionIds.length < 1 || observation.sessionIds.length > 16
+      || new Set(observation.sessionIds).size !== observation.sessionIds.length
+      || observation.sessionIds.some(id => !/^session-[A-Za-z0-9][A-Za-z0-9_-]{0,151}$/.test(id))) {
+      throw new Error('llm-pi-ai: transportObservation requires 1–16 distinct exact Session IDs')
+    }
+    if (!Number.isSafeInteger(observation.maxFrameBytes) || observation.maxFrameBytes < 1 || observation.maxFrameBytes > 1024 * 1024) {
+      throw new Error('llm-pi-ai: transportObservation.maxFrameBytes must be an integer from 1 to 1048576')
+    }
+  }
   resolveProfiles(config.providers)
 }
 

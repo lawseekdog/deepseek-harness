@@ -1023,12 +1023,22 @@ Requires: `llm`
 ```ts config-catalog
 /** Plugin configuration: the provider routes this instance owns. */
 export interface Config {
+  /** Optional metadata logging for exact Sessions; absent by default and never sent to the model. */
+  transportObservation?: TransportObservationConfig | null
   /**
    * pi-ai provider routes, keyed by provider. An empty (or omitted) dict is
    * the dormant settings-driven posture: the adapter mounts with no routes
    * and registers them the moment a settings section supplies profiles.
    */
   providers?: Record<string, PiAiProviderProfile>
+}
+
+/** Explicit deployment bounds; absence of this configuration disables observation. */
+export interface TransportObservationConfig {
+  /** Exact Session IDs; wildcards and empty lists are refused by configuration validation. */
+  sessionIds: string[]
+  /** Maximum retained bytes for one SSE frame; larger frames are counted but not parsed. */
+  maxFrameBytes: number
 }
 
 /** Configuration for one pi-ai provider route; the `providers` dict key IS the route. */
@@ -1278,7 +1288,7 @@ export type PiAiThinkingFormat = NonNullable<OpenAICompletionsCompat['thinkingFo
 
 Depends on: `Api` (`@earendil-works/pi-ai`) · `CacheRetention` (`@earendil-works/pi-ai`) · `Model` (`@earendil-works/pi-ai`) · `ModelThinkingLevel` (`@earendil-works/pi-ai`) · `OpenAICompletionsCompat` (`@earendil-works/pi-ai`) · [`RetryPolicyConfig`](../packages/llm/llm/src/index.ts) · `ThinkingBudgets` (`@earendil-works/pi-ai`) · `Transport` (`@earendil-works/pi-ai`)
 
-Source: [`packages/llm/llm-pi-ai/src/config.ts:216`](../packages/llm/llm-pi-ai/src/config.ts)
+Source: [`packages/llm/llm-pi-ai/src/config.ts:217`](../packages/llm/llm-pi-ai/src/config.ts)
 
 <a id="deepseek-aidsh-llm-replay"></a>
 

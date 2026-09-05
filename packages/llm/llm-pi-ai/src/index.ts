@@ -199,6 +199,10 @@ export function apply(ctx: Context, config: Config): void {
     profiles,
     resolveApiKey,
     auth,
+    transportObservation: {
+      config: () => current().transportObservation,
+      emit: (record) => { ctx.logger.info('llm-pi-ai transport metadata %s', JSON.stringify(record)) },
+    },
     resolveAttachments: () => ctx.get('attachments'),
     resolveImageAccess: (attachments, ref) => resolveImageAttachmentAccess(
       attachments,
