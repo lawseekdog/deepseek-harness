@@ -16,7 +16,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
-import LlmRuntime, { createMessage, createUserMessage, userAgent } from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { type GenerateOptions, createMessage, createUserMessage, userAgent } from '@deepseek-ai/dsh-llm'
 import LocalCredentialProvider from '@deepseek-ai/dsh-credentials-local'
 import FileSettingsProvider from '@deepseek-ai/dsh-settings-file'
 import * as LlmPiAi from '@deepseek-ai/dsh-llm-pi-ai'
@@ -276,5 +276,50 @@ describe('llm-pi-ai real dormant composition', () => {
         { role: 'user', content: 'continue' },
       ],
     })
+  })
+})
+describe('Session transport metadata through the real Loader and SDK', () => {
+  it('logs selected transport terminals without recording message content or observing another Session', async () => {
+    const server = await mockServer([{ events: textEvents }, { events: textEvents }])
+    const { ctx, settingsPath } = await loadComposition()
+    const records: Record<string, unknown>[] = []
+    ctx.logger.exporter({ export(message) {
+      if (message.args[0] === 'llm-pi-ai transport metadata %s' && typeof message.args[1] === 'string') {
+        records.push(JSON.parse(message.args[1]) as Record<string, unknown>)
+      }
+    } })
+    await writeFile(settingsPath, [
+      'llm-pi-ai:',
+      '  transportObservation:',
+      '    sessionIds: [session-observed]',
+      '    maxFrameBytes: 4096',
+      '  providers:',
+      '    deepseek:',
+      '      apiKeyEnv: PI_COMPOSITION_KEY',
+      `      baseURL: ${server.url}`,
+      '',
+    ].join('\n'))
+    await vi.waitFor(() => {
+      expect(ctx.llm.listProviders().map(provider => provider.id)).toEqual(['deepseek'])
+    }, { timeout: 5000 })
+    const message = createUserMessage({ content: [{ type: 'text', text: 'PRIVATE_INPUT_SENTINEL' }], source: { kind: 'user' } })
+    for (const id of ['session-unselected', 'session-observed']) {
+      const result = await assemble(ctx, { provider: 'deepseek', model: 'deepseek-v4-flash',
+        sessionId: id as NonNullable<GenerateOptions['sessionId']>, messages: [message] })
+      expect(result.finish).toEqual({ kind: 'stop' })
+      expect(result.message.content).toEqual([{ type: 'text', text: 'hello' }])
+      if (id === 'session-unselected') expect(records).toEqual([])
+    }
+    expect(server.requests).toHaveLength(2)
+    expect(new Set(records.map(record => record.sessionId))).toEqual(new Set(['session-observed']))
+    expect(records.find(record => record.event === 'http-response')).toMatchObject({ status: 200 })
+    const transport = records.find(record => record.event === 'http-end')?.transport as Record<string, unknown>
+    expect(transport.doneAt).toBeTypeOf('number')
+    expect(transport.eofAt).toBeTypeOf('number')
+    expect(transport.incompleteFrame).toBe(false)
+    expect(records.find(record => record.event === 'adapter-end')).toMatchObject({ outcome: 'exhausted', semanticFinish: 'stop' })
+    expect(JSON.stringify(records)).not.toContain('PRIVATE_INPUT_SENTINEL')
+    expect(JSON.stringify(records)).not.toContain('key-from-store')
+    expect(JSON.stringify(records)).not.toContain('hello')
   })
 })

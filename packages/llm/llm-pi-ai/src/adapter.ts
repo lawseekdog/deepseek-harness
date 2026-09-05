@@ -61,6 +61,8 @@ import { idleWatchdog, timeoutOf } from '@deepseek-ai/dsh-timeout'
 import type { ResolvedPiAiProviderProfile } from './config.ts'
 import { toPiContext } from './context.ts'
 import { toStreamChunks } from './stream.ts'
+import { observeTransport } from './transport-observation.ts'
+import type { TransportObservationOptions } from './transport-observation.ts'
 
 /** One resolution's frozen view: the profiles and the collection built from them. */
 interface PiAiSnapshot {
@@ -72,6 +74,8 @@ interface PiAiSnapshot {
 
 /** Constructor options for {@link PiAiAdapter}: the two resolution hooks the plugin owns. */
 export interface PiAiAdapterOptions {
+  /** Optional Session-scoped metadata observation; no SDK hooks are installed for other Sessions. */
+  transportObservation?: TransportObservationOptions
   /** Current validated profiles by provider route; called once per operation. */
   profiles: () => ReadonlyMap<string, ResolvedPiAiProviderProfile>
   /**
@@ -353,6 +357,11 @@ export class PiAiAdapter extends LlmAdapter {
       : AbortSignal.any([options.signal, consumer.signal])
     const streamIdleTimeoutMs = profile.streamIdleTimeoutMs
     using watchdog = idleWatchdog(upstream, streamIdleTimeoutMs, 'LLM_STREAM_IDLE_TIMEOUT')
+    const observation = observeTransport({
+      ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }),
+      provider: options.provider, model: options.model,
+    }, model.api, this.config.transportObservation)
+    let observedOutcome: 'exhausted' | 'error' | 'aborted' | 'consumer-closed' = 'consumer-closed'
 
     try {
       const containsImage = options.messages.some(message => contentHasImage(message.content))
@@ -379,6 +388,7 @@ export class PiAiAdapter extends LlmAdapter {
         }, onReplayDegrade)
       const events = snapshot.models.streamSimple(model, context, {
         ...profileOptions(profile, reasoning, apiKey),
+        ...observation?.sdk,
         ...options.temperature === undefined ? {} : { temperature: options.temperature },
         ...options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens },
         ...options.sessionId === undefined ? {} : { sessionId: String(options.sessionId) },
@@ -396,8 +406,10 @@ export class PiAiAdapter extends LlmAdapter {
           if (timeout !== undefined) throw timeout
           if (result.done) {
             exhausted = true
+            observedOutcome = 'exhausted'
             return
           }
+          observation?.chunk(result.value)
           yield result.value
         }
       } finally {
@@ -411,6 +423,7 @@ export class PiAiAdapter extends LlmAdapter {
         }
       }
     } catch (error: unknown) {
+      observedOutcome = options.signal?.aborted ? 'aborted' : 'error'
       if (timeoutOf(watchdog.signal, 'LLM_STREAM_IDLE_TIMEOUT') !== undefined) {
         throw new LlmError(`pi-ai stream idle timeout after ${streamIdleTimeoutMs}ms`, 'TIMEOUT', { cause: error })
       }
@@ -420,6 +433,7 @@ export class PiAiAdapter extends LlmAdapter {
       throw error
     } finally {
       consumer.abort('pi-ai stream consumer stopped')
+      observation?.end(observedOutcome)
     }
   }
 }
