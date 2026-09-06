@@ -55,7 +55,7 @@
  * @module @deepseek-ai/dsh-llm-pi-ai
  */
 
-import type { Context } from '@deepseek-ai/cordis'
+import type { Context, Logger } from '@deepseek-ai/cordis'
 import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 import { assertUsableApiKey, LlmError, resolveImageAttachmentAccess } from '@deepseek-ai/dsh-llm'
 import type { AdapterRegistrationHandle, DirectoryRegistrationHandle, LlmConfigurableProvider } from '@deepseek-ai/dsh-llm'
@@ -91,6 +91,28 @@ export const name = 'llm-pi-ai'
 export const inject = ['llm']
 
 const NS = 'llm-pi-ai'
+const TRANSPORT_OBSERVATION_LOGGER = 'llm-pi-ai-transport-observation'
+const TRANSPORT_OBSERVATION_FORMAT = 'llm-pi-ai transport metadata %s'
+
+/**
+ * Export only this adapter's already-redacted transport records to process stdout.
+ * @param ctx - Plugin context that owns the exporter registration.
+ * @returns A logger dedicated to transport observation records.
+ */
+function installTransportObservationExporter(ctx: Context): Logger {
+  const logger = ctx.logger(TRANSPORT_OBSERVATION_LOGGER)
+  ctx.logger.exporter({
+    export(message) {
+      if (message.name !== TRANSPORT_OBSERVATION_LOGGER || message.type !== 'info'
+        || message.args.length !== 2 || message.args[0] !== TRANSPORT_OBSERVATION_FORMAT
+        || typeof message.args[1] !== 'string') return
+      // This exporter receives a JSON serialization of TransportObservationRecord,
+      // whose type excludes request bodies, response content and credentials.
+      console.log(`llm-pi-ai transport metadata ${message.args[1]}`)
+    },
+  })
+  return logger
+}
 
 /**
  * The registry captures these per route; a change here must re-register.
@@ -146,6 +168,7 @@ export function apply(ctx: Context, config: Config): void {
   let current: () => Config = () => config
   let lastRaw: Config | undefined
   let memoized: ReadonlyMap<string, ResolvedPiAiProviderProfile> | undefined
+  const transportObservationLogger = installTransportObservationExporter(ctx)
   /**
    * The resolved profiles for the current configuration, memoized by the raw
    * snapshot's identity — which is also what makes the adapter's own snapshot
@@ -200,7 +223,7 @@ export function apply(ctx: Context, config: Config): void {
     auth,
     transportObservation: {
       config: () => current().transportObservation,
-      emit: (record) => { ctx.logger.info('llm-pi-ai transport metadata %s', JSON.stringify(record)) },
+      emit: (record) => { transportObservationLogger.info(TRANSPORT_OBSERVATION_FORMAT, JSON.stringify(record)) },
     },
     resolveAttachments: () => ctx.get('attachments'),
     resolveImageAccess: (attachments, ref) => resolveImageAttachmentAccess(

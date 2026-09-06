@@ -42,6 +42,7 @@ afterEach(async () => {
   root = undefined
   await closeMockServers()
   vi.unstubAllEnvs()
+  vi.restoreAllMocks()
 })
 
 /** Boot the dormant composition: a bare `llm-pi-ai` row with no config at all. */
@@ -279,12 +280,14 @@ describe('llm-pi-ai real dormant composition', () => {
   })
 })
 describe('Session transport metadata through the real Loader and SDK', () => {
-  it('logs selected transport terminals without recording message content or observing another Session', async () => {
+  it('exports only selected transport terminals without recording private model or logger content', async () => {
+    const stdout = vi.spyOn(console, 'log').mockImplementation(() => {})
     const server = await mockServer([{ events: textEvents }, { events: textEvents }])
     const { ctx, settingsPath } = await loadComposition()
     const records: Record<string, unknown>[] = []
     ctx.logger.exporter({ export(message) {
-      if (message.args[0] === 'llm-pi-ai transport metadata %s' && typeof message.args[1] === 'string') {
+      if (message.name === 'llm-pi-ai-transport-observation'
+        && message.args[0] === 'llm-pi-ai transport metadata %s' && typeof message.args[1] === 'string') {
         records.push(JSON.parse(message.args[1]) as Record<string, unknown>)
       }
     } })
@@ -302,13 +305,19 @@ describe('Session transport metadata through the real Loader and SDK', () => {
     await vi.waitFor(() => {
       expect(ctx.llm.listProviders().map(provider => provider.id)).toEqual(['deepseek'])
     }, { timeout: 5000 })
+    ctx.logger.info('llm-pi-ai transport metadata %s', 'PRIVATE_LOG_SENTINEL')
+    ctx.logger('llm-pi-ai-transport-observation').info('unrelated %s', 'PRIVATE_LOG_SENTINEL')
+    expect(stdout).not.toHaveBeenCalled()
     const message = createUserMessage({ content: [{ type: 'text', text: 'PRIVATE_INPUT_SENTINEL' }], source: { kind: 'user' } })
     for (const id of ['session-unselected', 'session-observed']) {
       const result = await assemble(ctx, { provider: 'deepseek', model: 'deepseek-v4-flash',
         sessionId: id as NonNullable<GenerateOptions['sessionId']>, messages: [message] })
       expect(result.finish).toEqual({ kind: 'stop' })
       expect(result.message.content).toEqual([{ type: 'text', text: 'hello' }])
-      if (id === 'session-unselected') expect(records).toEqual([])
+      if (id === 'session-unselected') {
+        expect(records).toEqual([])
+        expect(stdout).not.toHaveBeenCalled()
+      }
     }
     expect(server.requests).toHaveLength(2)
     expect(new Set(records.map(record => record.sessionId))).toEqual(new Set(['session-observed']))
@@ -318,8 +327,16 @@ describe('Session transport metadata through the real Loader and SDK', () => {
     expect(transport.eofAt).toBeTypeOf('number')
     expect(transport.incompleteFrame).toBe(false)
     expect(records.find(record => record.event === 'adapter-end')).toMatchObject({ outcome: 'exhausted', semanticFinish: 'stop' })
-    expect(JSON.stringify(records)).not.toContain('PRIVATE_INPUT_SENTINEL')
-    expect(JSON.stringify(records)).not.toContain('key-from-store')
-    expect(JSON.stringify(records)).not.toContain('hello')
+    const stdoutRecords = stdout.mock.calls.map((args) => {
+      expect(args).toHaveLength(1)
+      expect(args[0]).toMatch(/^llm-pi-ai transport metadata \{/)
+      return JSON.parse(String(args[0]).slice('llm-pi-ai transport metadata '.length)) as Record<string, unknown>
+    })
+    expect(stdoutRecords).toEqual(records)
+    const exported = JSON.stringify(stdoutRecords)
+    expect(exported).not.toContain('PRIVATE_INPUT_SENTINEL')
+    expect(exported).not.toContain('PRIVATE_LOG_SENTINEL')
+    expect(exported).not.toContain('key-from-store')
+    expect(exported).not.toContain('hello')
   })
 })

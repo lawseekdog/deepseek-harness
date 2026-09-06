@@ -10,7 +10,7 @@ Status: proposed
 
 ## 提案
 
-pi-ai 适配器在既有 SDK fetch 和流迭代器处，仅观察明确选定的 Session。省略配置或配置为 null 时保持关闭。既有日志只接收有界元数据；适配器保持请求参数、响应字节、取消和提供方异常不变。包级 [README](../../../../packages/llm/llm-pi-ai/README.zh.md#observe-transport-metadata-for-selected-sessions)维护配置与元数据语义。
+pi-ai 适配器在既有 SDK fetch 和流迭代器处，仅观察明确选定的 Session。省略配置或配置为 null 时保持关闭。私有命名 logger 只接收有界元数据，专用 Cordis exporter 也只把这些精确记录写入进程 stdout，不会导出插件的其他消息；适配器保持请求参数、响应字节、取消和提供方异常不变。包级 [README](../../../../packages/llm/llm-pi-ai/README.zh.md#observe-transport-metadata-for-selected-sessions)维护配置与元数据语义。
 
 观察编号仅归属一次适配器调用。HTTP 序号不冒充 Agent 尝试编号。缺少的官方 turn 或 trace 上下文保持缺失，诊断日志也不构成业务提交证据。此改动不影响 Session 事件或模型可见输入。
 
@@ -24,9 +24,11 @@ pi-ai 适配器在既有 SDK fetch 和流迭代器处，仅观察明确选定的
 
 **独立读取克隆响应。** 第二个读取者可能提前消费并保留无界排队数据。因此观察仅随 SDK 自身拉取进行。
 
+**为插件命名空间挂载通用控制台 logger。** 它的级别过滤无法区分传输记录与同一命名空间中的其他消息。按消息过滤的 exporter 将进程日志范围限制在已脱敏元数据内。
+
 ## 验收标准
 
-定向测试证明默认关闭、精确 Session 选择、字节一致、跨块 SSE 分帧、DONE 与 EOF 分离、取消、提供方异常、有界解析以及日志输出失败隔离。真实 Loader 组合通过本地 HTTP fixture 证明插件日志收到元数据，SDK 同时产生未改变的模型结果。发布前完成包编译与文档校验。真实模型取证仅随已授权的正常请求进行，不能倒推早先失败请求的传输事实。
+定向测试证明默认关闭、精确 Session 选择、字节一致、跨块 SSE 分帧、DONE 与 EOF 分离、取消、提供方异常、有界解析以及日志输出失败隔离。真实 Loader 组合通过本地 HTTP fixture 证明插件日志收到元数据、stdout 仅收到脱敏记录、无关 logger 与模型内容保持缺失，且 SDK 同时产生未改变的模型结果。发布前完成包编译与文档校验。真实模型取证仅随已授权的正常请求进行，不能倒推早先失败请求的传输事实。
 
 ## 风险
 

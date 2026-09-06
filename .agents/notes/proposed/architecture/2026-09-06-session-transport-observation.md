@@ -10,7 +10,7 @@ A terminal model chunk and an HTTP body reaching EOF are separate observations. 
 
 ## Proposal
 
-The pi-ai adapter observes explicitly selected Sessions at its existing SDK fetch and stream iterator. Configuration remains disabled when omitted or null. The existing logger receives bounded metadata only; the adapter preserves request arguments, response bytes, cancellation and provider exceptions. The package [README](../../../../packages/llm/llm-pi-ai/README.md#observe-transport-metadata-for-selected-sessions) owns configuration and metadata semantics.
+The pi-ai adapter observes explicitly selected Sessions at its existing SDK fetch and stream iterator. Configuration remains disabled when omitted or null. A private named logger receives bounded metadata only, and a dedicated Cordis exporter writes only those exact records to process stdout; it cannot export other plugin messages. The adapter preserves request arguments, response bytes, cancellation and provider exceptions. The package [README](../../../../packages/llm/llm-pi-ai/README.md#observe-transport-metadata-for-selected-sessions) owns configuration and metadata semantics.
 
 The observation identifier belongs only to one adapter invocation. HTTP ordinals do not claim to be Agent attempt IDs. Missing official turn or trace context stays missing, and diagnostic logs never become evidence of a business commit. The change affects neither Session events nor model-visible input.
 
@@ -24,9 +24,11 @@ The observation identifier belongs only to one adapter invocation. HTTP ordinals
 
 **Read a cloned response independently.** A second reader can consume ahead and retain unbounded queued data. Observation instead follows the SDK's own pulls.
 
+**Mount the general console logger for the plugin namespace.** Its level filter cannot distinguish transport records from unrelated messages in the same namespace. A message-filtered exporter keeps the process-log surface limited to the already-redacted metadata.
+
 ## Acceptance criteria
 
-Focused tests prove default-off and exact-Session selection, byte identity, split SSE framing, separate DONE/EOF, cancellation, provider errors, bounded parsing and sink failure containment. A real Loader composition with a local HTTP fixture proves the plugin logger receives metadata while the SDK produces the unchanged model result. Package compilation and documentation checks pass before publication. Real-model evidence is collected only during an authorized normal request, and cannot retrospectively establish an earlier failed request's transport facts.
+Focused tests prove default-off and exact-Session selection, byte identity, split SSE framing, separate DONE/EOF, cancellation, provider errors, bounded parsing and sink failure containment. A real Loader composition with a local HTTP fixture proves the plugin logger receives metadata, stdout receives only the redacted records, unrelated logger and model content stay absent, and the SDK produces the unchanged model result. Package compilation and documentation checks pass before publication. Real-model evidence is collected only during an authorized normal request, and cannot retrospectively establish an earlier failed request's transport facts.
 
 ## Risks
 
