@@ -10,6 +10,7 @@
 
 import { LlmError } from '@deepseek-ai/dsh-llm'
 import type { Message, ModelMessageSource, ReplayEnvelope } from '@deepseek-ai/dsh-llm'
+import { parseToolCallArguments } from '@earendil-works/pi-ai'
 import type { Api, AssistantMessage, Usage as PiUsage } from '@earendil-works/pi-ai'
 
 /** Per-block half of the pi-ai replay envelope, one entry per content block. */
@@ -38,19 +39,6 @@ export interface PiAiReplayResponse {
 interface PiAiReplayState {
   response: PiAiReplayResponse
   blocks: PiAiReplayBlock[]
-}
-
-/** Parse tool-call argument JSON; tolerate model malformations with {}. */
-function parseArguments(raw: string): Record<string, unknown> {
-  try {
-    const parsed: unknown = JSON.parse(raw)
-    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>
-    }
-  } catch {
-    // fall through
-  }
-  return {}
 }
 
 /** Construct the zero usage value required by historical pi-ai messages. */
@@ -161,7 +149,8 @@ function foreignAssistant(message: Message): AssistantMessage {
         type: 'toolCall',
         id: block.id,
         name: block.name,
-        arguments: parseArguments(block.arguments),
+        rawArguments: block.arguments,
+        arguments: parseToolCallArguments(block.arguments),
       }); break
       case 'image':
         throw new LlmError('pi-ai chat history cannot represent structured assistant image output', 'UNSUPPORTED_CONTENT')
@@ -209,7 +198,8 @@ function replayedAssistant(message: Message, source: ModelMessageSource, rawStat
         type: 'toolCall',
         id: block.id,
         name: block.name,
-        arguments: parseArguments(block.arguments),
+        rawArguments: block.arguments,
+        arguments: parseToolCallArguments(block.arguments),
         ...replay.type === 'tool-call' && replay.thoughtSignature !== undefined ? { thoughtSignature: replay.thoughtSignature } : {},
       }
       /* v8 ignore next -- readReplayState rejects unknown replay tags, so an equal plugin-added Harness tag cannot reach this switch */
