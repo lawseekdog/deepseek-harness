@@ -17,6 +17,7 @@ packages:
 linkWorkspacePackages: true
 
 overrides:
+  '@earendil-works/pi-ai': '0.84.4'
   '@deepseek-ai/cosmokit': 'link:vendor/cosmokit'
   '@deepseek-ai/schemastery': 'link:vendor/schemastery'
 
@@ -75,4 +76,5 @@ minimumReleaseAgeExclude:
   - '@openai/codex@0.149.1||0.149.1-darwin-arm64||0.149.1-darwin-x64||0.149.1-linux-arm64||0.149.1-linux-x64||0.149.1-win32-arm64||0.149.1-win32-x64'
 
 patchedDependencies:
+  '@earendil-works/pi-ai@0.84.4': patches/pi-ai-raw-arguments/pi-ai-0.84.4.patch
   node-pty@1.2.0-beta.15: patches/node-pty@1.2.0-beta.15.patch

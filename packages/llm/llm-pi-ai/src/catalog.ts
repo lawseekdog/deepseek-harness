@@ -140,13 +140,15 @@ export const CACHE_CONTROL_FORMATS = Object.keys(CACHE_CONTROL_FORMAT_GATE) as r
 export type PiAiChatTemplateVar = Extract<ChatTemplateKwargValue, { $var: string }>['$var']
 
 /** Drift gate over {@link PiAiChatTemplateVar}; a new upstream placeholder fails compilation until named. */
-const CHAT_TEMPLATE_VAR_GATE: Record<PiAiChatTemplateVar, true> = {
+const CHAT_TEMPLATE_VAR_GATE: Record<PiAiChatTemplateVar, boolean> = {
   'thinking.enabled': true,
   'thinking.effort': true,
+  'thinking.budget': false,
 }
 
 /** The request-state placeholders a profile may name. */
-export const CHAT_TEMPLATE_VARS = Object.keys(CHAT_TEMPLATE_VAR_GATE) as readonly PiAiChatTemplateVar[]
+export const CHAT_TEMPLATE_VARS = Object.entries(CHAT_TEMPLATE_VAR_GATE)
+  .filter(([, offered]) => offered).map(([name]) => name) as readonly PiAiChatTemplateVar[]
 
 let providerIndex: Map<string, Provider> | undefined
 
@@ -229,6 +231,7 @@ const COMPLETIONS_COMPAT_GATE = {
   chatTemplateKwargs: 'offer',
   chatTemplateArgs: 'offer',
   supportsThinkingTokenBudget: 'offer',
+  thinkingTokenBudgetField: 'withhold',
   supportsStrictMode: 'offer',
   cacheControlFormat: 'offer',
   supportsLongCacheRetention: 'offer',
@@ -264,6 +267,7 @@ const ANTHROPIC_COMPAT_GATE = {
   supportsStrictTools: 'offer',
   sendSessionAffinityHeaders: 'withhold',
   supportsToolReferences: 'withhold',
+  allowedFallbackModels: 'withhold',
 } as const satisfies Record<keyof AnthropicMessagesCompat, CompatDisposition>
 
 /** Disposition of every `BedrockCompat` field; a drift gate like the one above. */

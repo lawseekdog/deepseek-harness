@@ -1,8 +1,8 @@
 /**
  * pi-ai assistant event translation into the Harness streaming protocol.
  *
- * pi-ai tool-call arguments are parsed objects while the Harness keeps their
- * raw JSON representation. pi-ai also reports failures as terminal stream
+ * Provider-native argument text remains authoritative when pi-ai supplies it;
+ * object-only provider calls are serialized as JSON. pi-ai reports failures as terminal stream
  * events, which this module maps into Harness finish chunks.
  *
  * @module dsh-llm-pi-ai/stream
@@ -11,7 +11,7 @@
 import { brandString } from '@deepseek-ai/dsh-brand'
 import { CONTEXT_WINDOW_EXCEEDED_CODE, EMPTY_RESPONSE_CODE, isContextWindowExceededError, isQuotaExceededError, LlmError, QUOTA_EXCEEDED_CODE } from '@deepseek-ai/dsh-llm'
 import type { FinishReason, StreamChunk, TokenUsage, ToolCallId } from '@deepseek-ai/dsh-llm'
-import { isContextOverflow } from '@earendil-works/pi-ai'
+import { isContextOverflow, serializeToolCallArguments } from '@earendil-works/pi-ai'
 import type { AssistantMessage, AssistantMessageEvent, Usage as PiUsage } from '@earendil-works/pi-ai'
 import { toPiReplayState } from './replay.ts'
 
@@ -197,9 +197,7 @@ export async function* toStreamChunks(
             type: 'tool-call',
             id: brandString<ToolCallId>(event.toolCall.id),
             name: event.toolCall.name,
-            // pi-ai hands back the PARSED arguments; the harness vocabulary
-            // keeps the raw string.
-            arguments: JSON.stringify(event.toolCall.arguments),
+            arguments: serializeToolCallArguments(event.toolCall),
           },
         }
         break

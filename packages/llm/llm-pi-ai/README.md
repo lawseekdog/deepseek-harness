@@ -156,7 +156,7 @@ The plugin declares every installed catalog provider it can authenticate in the 
 
 ### Replay and vocabulary
 
-Successful assistant responses store a versioned, lossless-JSON replay state beside the provider and model that produced them — response-level facts plus one per-block entry per streamed block. At request time, `LlmRuntime` passes replay state only when the same adapter instance owns both routes; the adapter validates it and restores native response ids and provider signatures, degrading an unusable state to provider-neutral content instead of failing the request. pi-ai tool-call arguments are parsed objects, so the adapter parses input and re-stringifies output to the harness raw-JSON convention; pi-ai in-stream error events map to terminal `finish` chunks.
+Successful assistant responses store a versioned, lossless-JSON replay state beside the provider and model that produced them — response-level facts plus one per-block entry per streamed block. At request time, `LlmRuntime` passes replay state only when the same adapter instance owns both routes; the adapter validates it and restores native response ids and provider signatures, degrading an unusable state to provider-neutral content instead of failing the request. Tool-call argument text stays in Harness content. The patched pi-ai dependency carries that text in `rawArguments` and exposes a parsed object only when strict JSON parsing produces one. Responses reception and Responses or Chat Completions replay preserve the original text, including malformed JSON; object-only protocols reject unrepresentable arguments. pi-ai in-stream error events map to terminal `finish` chunks.
 
 </details>
 
@@ -197,7 +197,7 @@ Conversion preserves logical request order, while image handles and offload plac
 
 #### What the model sees
 
-pi-ai events become harness reasoning, text, tool-call, usage, and finish chunks. The adapter passes parsed tool arguments to the harness as raw JSON strings.
+pi-ai events become harness reasoning, text, tool-call, usage, and finish chunks. Provider-native Tool argument text reaches the harness unchanged; object-only provider calls are serialized as JSON. Invalid argument text remains available to the harness Tool validator and subsequent model history.
 
 #### Token effect
 

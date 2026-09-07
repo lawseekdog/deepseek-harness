@@ -219,7 +219,7 @@ describe('toPiContext', () => {
     expect(message.content).toEqual([
       { type: 'thinking', thinking: 'hmm' },
       { type: 'text', text: 'calling' },
-      { type: 'toolCall', id: 'c1', name: 'f', arguments: { a: 1 } },
+      { type: 'toolCall', id: 'c1', name: 'f', rawArguments: '{"a":1}', arguments: { a: 1 } },
     ])
   })
 
@@ -253,7 +253,7 @@ describe('toPiContext', () => {
     })
   })
 
-  it('parses malformed tool-call arguments to {}', () => {
+  it('preserves malformed tool-call arguments without a parsed object', () => {
     const context = toPiContext({
       provider: 'deepseek',
       model: 'm',
@@ -264,10 +264,10 @@ describe('toPiContext', () => {
       })],
     })
     const message = context.messages[0] as AssistantMessage
-    expect(message.content[0]).toEqual({ type: 'toolCall', id: 'c1', name: 'f', arguments: {} })
+    expect(message.content[0]).toEqual({ type: 'toolCall', id: 'c1', name: 'f', rawArguments: '{broken', arguments: undefined })
   })
 
-  it('parses non-object argument JSON (arrays, scalars) to {}', () => {
+  it('preserves non-object argument JSON without a parsed object', () => {
     const context = toPiContext({
       provider: 'deepseek',
       model: 'm',
@@ -277,7 +277,7 @@ describe('toPiContext', () => {
         source: { kind: 'plugin', plugin: 'test' },
       })],
     })
-    expect((context.messages[0] as AssistantMessage).content[0]).toMatchObject({ arguments: {} })
+    expect((context.messages[0] as AssistantMessage).content[0]).toMatchObject({ rawArguments: '[1,2]', arguments: undefined })
   })
 
   it('recovers toolName for tool results from the preceding assistant call', () => {
