@@ -1,3 +1,4 @@
+import type { SessionSearchValue } from '../../types.ts'
 /**
  * ClientSessions: root sessions service — list snapshot store (manager
  * projection; carries `current`, the persisted selection every
@@ -32,7 +33,7 @@ import type { AgentContext, ISessions } from '../contract/sessions.ts'
 import { createScope, scopeOf as scopeTagOf } from '../scope.ts'
 import { SessionManager } from './manager.ts'
 import type { SessionRemotes } from './remotes.ts'
-import type { SessionListPhase, SessionSearchResultItem, SubagentCatalogSnapshot } from './manager.ts'
+import type { SessionListPhase, SubagentCatalogSnapshot } from './manager.ts'
 import type { Session } from './session.ts'
 
 /** Session list row projected from the host list RPC plus live stream increments. */
@@ -326,7 +327,7 @@ export class ClientSessions implements ISessions {
   }
 
   /**
-   * Search the Host's visible message-content index. Results stay
+   * Search the Host's visible Session titles and message-content index. Results stay
    * request-local; the list snapshot remains the metadata authority.
    * @param query - non-blank literal phrase.
    * @param signal - cancellation for a superseded search.
@@ -335,7 +336,7 @@ export class ClientSessions implements ISessions {
   search(
     query: string,
     signal: AbortSignal,
-  ): Promise<RemoteResult<{ items: SessionSearchResultItem[]; hasMore: boolean }>> {
+  ): Promise<RemoteResult<SessionSearchValue>> {
     return this.manager.search(query, signal)
   }
 

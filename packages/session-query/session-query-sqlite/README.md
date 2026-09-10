@@ -60,7 +60,7 @@ The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-a
 
 Ranking is deterministic: more actual FTS5 highlighted-match spans first, then shorter documents, with event time, session id, and seq breaking ties. Results carry plain-text snippets bounded by `snippetChars` Unicode code points, with no provider-specific numeric score. Pages continue through an opaque `SessionSearchCursor` bound to the exact normalized request; a cursor becomes stale when its relevant corpus changes (`SESSION_QUERY_STALE_CURSOR`), and a within-session cursor survives changes to unrelated sessions while a cross-session cursor does not.
 
-The `unicode61` tokenizer matches tokens and phrases, not arbitrary substrings: `AI` does not match the token `BRAID`. Use `ctx.sessionQuery.filterEvents()` with a `text` clause when a literal whitespace-flexible substring scan is required.
+Before indexing and MATCH, Han code points are symmetrically separated into adjacent tokens, so a literal phrase such as `刑事` matches inside `分析这个刑事案件`. Other scripts retain `unicode61` token semantics: `AI` does not match the token `BRAID`. Use `ctx.sessionQuery.filterEvents()` with a `text` clause when another literal whitespace-flexible substring scan is required.
 
 ### When to defer or disable search
 
@@ -69,6 +69,8 @@ With `openAt: first-search`, the service activates without importing `node:sqlit
 ### Failures and recovery
 
 Typed `SessionQueryError` failures carry stable codes: `SESSION_QUERY_SEARCH_DISABLED` when search is configured off; `SESSION_QUERY_INDEX_FAILED` when the index cannot open or reconcile; `SESSION_QUERY_SESSION_NOT_FOUND` when a search target is absent; `SESSION_QUERY_STALE_CURSOR` when the corpus changed between pages — retry the complete search call; and `SESSION_QUERY_INVALID_CURSOR` for a cursor that does not belong to this request. Cancellation is honored between synchronous SQLite calls; a statement already executing on the JavaScript thread cannot be interrupted.
+
+Cross-session pages report `coverage: incomplete` and `unsupported_sessions` when inspecting an enumerable intact log raises `SessionFormatUnsupportedError`. Unsupported logs remain in the Session store and list; the query removes only obsolete derived index rows and never enables resume. Other persistence failures still reject the search. Targeting an unsupported Session with `searchEvents` rejects with `SESSION_QUERY_FORMAT_UNSUPPORTED`; a supported target has complete coverage even when unrelated Sessions are unsupported. The first observation after restart validates persisted logs before reusing index rows.
 
 -----
 
@@ -143,7 +145,7 @@ These limits define when this package is a poor fit or needs special operational
 
 - **No caller authorization** — this is a trusted context-wide service; a model tool or UI must enforce its own access policy.
 - **Synchronous query execution** — `DatabaseSync` blocks the JavaScript thread during MATCH execution and cannot interrupt a statement already running.
-- **Token recall, not arbitrary substrings** — the `unicode61` tokenizer does not match substrings inside a larger token; use `filterEvents()` for literal scans.
+- **Han phrases, otherwise token recall** — Han code points are indexed as adjacent tokens so short phrases such as `刑事` match inside longer Chinese text. Other scripts retain `unicode61` token semantics rather than arbitrary substring matching; use `filterEvents()` for literal scans.
 - **Single-owner derived index** — one service in one process must own each index path; external writers and multi-process sharing are unsupported.
 
 <a id="dev-note"></a>
@@ -156,6 +158,6 @@ This Dev Note is working context for maintainers: open design questions and dire
 
 #### Future: alternate tokenizers and search providers
 
-The `unicode61` tokenizer choice trades substring recall for index size and two-character token support; the trigram alternative was measured and rejected. Switching tokenizers or adding another search backend would change indexed recall and require its own reconciliation and generation story.
+The `unicode61` tokenizer with symmetric Han segmentation keeps the smaller token index while supporting one- and two-character Han queries; the trigram alternative was measured and rejected because it does not cover shorter queries. Switching tokenizers or adding another search backend would change indexed recall and require its own reconciliation and generation story.
 
 </details>

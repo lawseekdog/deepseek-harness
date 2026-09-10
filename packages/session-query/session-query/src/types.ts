@@ -227,8 +227,20 @@ export interface SessionEventSearchDocument extends SessionEventRecord {
   text: string
 }
 
+/** An intact Session the current runtime cannot interpret; no raw path is exposed. */
+export interface UnsupportedSearchSession {
+  sessionId: SessionId
+  reason: 'SESSION_FORMAT_UNSUPPORTED'
+}
+
+/** Search completeness over the observed corpus, independent of match count. */
+export interface SessionSearchCoverage {
+  coverage: 'complete' | 'incomplete'
+  unsupported_sessions: readonly UnsupportedSearchSession[]
+}
+
 /** One cursor-paginated result page. */
-export interface SessionSearchPage<T> {
+export interface SessionSearchPage<T> extends SessionSearchCoverage {
   /** Results for this page in contract-defined order. */
   items: readonly T[]
   /** Opaque continuation cursor, absent on the final page. */

@@ -1465,8 +1465,8 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: '@Remote(\'search\') search(request: SessionSearchRequest, signal: AbortSignal): Promise<SessionSearchValue>',
-        description: 'Search visible Session content without resuming an Agent.',
-        parameters: [{ name: 'request', description: 'literal message-content query.' }, { name: 'signal', description: 'cancellation for list and search reads.' }],
+        description: 'Search visible Session titles and message content without resuming an Agent.',
+        parameters: [{ name: 'request', description: 'literal title-or-message query.' }, { name: 'signal', description: 'cancellation for list and search reads.' }],
         returns: 'authorized bounded Session search results.',
       },
       {
@@ -5387,6 +5387,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface SessionResultRange {\n    from?: number;\n    to?: number;\n}',
   },
   {
+    name: 'SessionSearchCoverage',
+    declaration: 'export interface SessionSearchCoverage {\n    coverage: \'complete\' | \'incomplete\';\n    unsupported_sessions: readonly UnsupportedSearchSession[];\n}',
+  },
+  {
     name: 'SessionSearchCursor',
     declaration: 'export type SessionSearchCursor = Branded<\'SessionSearchCursor\'>;',
   },
@@ -5400,15 +5404,19 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SessionSearchItem',
-    declaration: 'export interface SessionSearchItem {\n    readonly sessionId: SessionId;\n    readonly snippet: string;\n}',
+    declaration: 'export interface SessionSearchItem {\n    readonly sessionId: SessionId;\n    readonly snippet: string;\n    readonly match: SessionSearchMatch;\n}',
+  },
+  {
+    name: 'SessionSearchMatch',
+    declaration: 'export type SessionSearchMatch = {\n    readonly kind: \'title\';\n    readonly projectionAsOfSeq: number;\n} | {\n    readonly kind: \'message\';\n    readonly seq: number;\n    readonly type: \'user/message\' | \'assistant/message\';\n};',
   },
   {
     name: 'SessionSearchPage',
-    declaration: 'export interface SessionSearchPage<T> {\n    items: readonly T[];\n    nextCursor?: SessionSearchCursor;\n}',
+    declaration: 'export interface SessionSearchPage<T> extends SessionSearchCoverage {\n    items: readonly T[];\n    nextCursor?: SessionSearchCursor;\n}',
   },
   {
     name: 'SessionSearchValue',
-    declaration: 'export interface SessionSearchValue {\n    readonly items: readonly SessionSearchItem[];\n    readonly hasMore: boolean;\n}',
+    declaration: 'export interface SessionSearchValue {\n    readonly coverage: \'complete\' | \'incomplete\';\n    readonly unsupported_sessions: readonly {\n        readonly sessionId: SessionId;\n        readonly reason: \'SESSION_FORMAT_UNSUPPORTED\';\n    }[];\n    readonly items: readonly SessionSearchItem[];\n    readonly hasMore: boolean;\n}',
   },
   {
     name: 'SessionSeedEventState',
@@ -6237,6 +6245,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'TypertTypeModel',
     declaration: 'export interface TypertTypeModel {\n    readonly name: string;\n    readonly declaration: string;\n}',
+  },
+  {
+    name: 'UnsupportedSearchSession',
+    declaration: 'export interface UnsupportedSearchSession {\n    sessionId: SessionId;\n    reason: \'SESSION_FORMAT_UNSUPPORTED\';\n}',
   },
   {
     name: 'UpdateTeamTaskRequest',

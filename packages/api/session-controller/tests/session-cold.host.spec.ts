@@ -23,8 +23,10 @@ import {
   SessionPersistenceRevision,
   type SessionPersistenceSnapshot,
 } from '@deepseek-ai/dsh-session-persistence'
+import { ApiSessionList } from '../src/list.ts'
 import {
   createSessionTestRemote,
+  installSessionReadTestServices,
   testSessionPersistence,
 } from './test-remote.ts'
 
@@ -178,6 +180,284 @@ describe('sessions.list cold merge', () => {
     expect(inspect).not.toHaveBeenCalled()
   })
 
+  it('refolds a cold log whose cache lacks a required list projection, then reuses the cache', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    const meta = header('required-projection-missing', 100)
+    // A balanced stored log: the cold read appends no interrupted-turn closers,
+    // so the refold sees exactly these events.
+    const events = [
+      { type: 'turn/start', seq: SessionSeq(0), time: 200, data: { turn: 1 } },
+      { type: 'turn/end', seq: SessionSeq(1), time: 200, data: { turn: 1, reason: { kind: 'completed' } } },
+    ] satisfies SessionEvent[]
+    const inspect = vi.fn(() => Promise.resolve({
+      meta,
+      inheritedEventCount: SessionLogOffset(0),
+      events,
+    }))
+    providePersistence(ctx, {
+      list: () => Promise.resolve([meta]),
+      inspect,
+    })
+    let cached = {
+      asOfSeq: SessionSeq(0),
+      values: { sessionListMetadata: { blank: false, lastPromptAt: null } },
+    }
+    const complete = {
+      asOfSeq: SessionSeq(0),
+      values: {
+        sessionListMetadata: { blank: false, lastPromptAt: null },
+        'test/required-cold-list': true,
+      },
+    }
+    const coldSnapshot = vi.fn(() => {
+      cached = complete
+      return complete
+    })
+    ctx.provide('sessionProjectionCache', {
+      cachedSnapshot: vi.fn(() => cached),
+      hydratePrepared: vi.fn(() => complete),
+      coldSnapshot,
+    } as never)
+    const remote = createSessionTestRemote(ctx, {
+      defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
+      cwd: '/tmp',
+      requiredColdListProjectionKeys: ['test/required-cold-list'],
+    })
+    const observeSession = vi.spyOn(ctx.sessionQuery, 'observeSession')
+
+    const first = await remote.list(request({}))
+    if (!first.ok) throw new Error('list failed')
+    expect(first.value.items).toHaveLength(1)
+    expect(first.value.items[0]).toMatchObject({ sessionId: meta.id })
+    expect(first.value.items[0]?.projections?.values).toEqual(
+      expect.objectContaining({ 'test/required-cold-list': true }),
+    )
+    expect(observeSession).toHaveBeenCalledOnce()
+    expect(observeSession.mock.calls[0]?.[0]).toBe(meta.id)
+    expect(observeSession.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal)
+    expect(observeSession.mock.calls[0]?.[1]?.projectionMode).toBe('all')
+    expect(coldSnapshot).toHaveBeenCalledWith(meta, SessionLogOffset(0), events)
+
+    await expect(remote.list(request({}))).resolves.toMatchObject({ ok: true })
+    expect(inspect).toHaveBeenCalledOnce()
+    expect(observeSession).toHaveBeenCalledOnce()
+    expect(coldSnapshot).toHaveBeenCalledOnce()
+    await ctx.fiber.dispose()
+  })
+
+  it('fails a required projection refold when the authoritative read fails', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    const meta = header('required-projection-read-failure', 100)
+    providePersistence(ctx, {
+      list: () => Promise.resolve([meta]),
+      inspect: () => Promise.reject(new Error('storage offline')),
+    })
+    ctx.provide('sessionProjectionCache', {
+      cachedSnapshot: () => ({
+        asOfSeq: SessionSeq(0),
+        values: { sessionListMetadata: { blank: false, lastPromptAt: null } },
+      }),
+      hydratePrepared: vi.fn(),
+      coldSnapshot: vi.fn(),
+    } as never)
+    const remote = createSessionTestRemote(ctx, {
+      defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
+      cwd: '/tmp',
+      requiredColdListProjectionKeys: ['test/required-cold-list'],
+    })
+
+    await expect(remote.list(request({}))).resolves.toMatchObject({
+      ok: false,
+      error: { message: expect.stringContaining('storage offline') as string },
+    })
+    await ctx.fiber.dispose()
+  })
+
+  it('fails when an exact refold still omits a configured required projection', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    const meta = header('required-projection-unregistered', 100)
+    providePersistence(ctx, {
+      list: () => Promise.resolve([meta]),
+      inspect: () => Promise.resolve({
+        meta,
+        inheritedEventCount: SessionLogOffset(0),
+        events: [],
+      }),
+    })
+    const incomplete = {
+      asOfSeq: -1,
+      values: { sessionListMetadata: { blank: true, lastPromptAt: null } },
+    }
+    ctx.provide('sessionProjectionCache', {
+      cachedSnapshot: () => incomplete,
+      hydratePrepared: () => incomplete,
+      coldSnapshot: () => incomplete,
+    } as never)
+    const remote = createSessionTestRemote(ctx, {
+      defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
+      cwd: '/tmp',
+      requiredColdListProjectionKeys: ['test/not-registered'],
+    })
+
+    await expect(remote.list(request({}))).resolves.toMatchObject({
+      ok: false,
+      error: { message: expect.stringContaining('test/not-registered') as string },
+    })
+    await ctx.fiber.dispose()
+  })
+
+  it('reports cancellation while reading a required cold-list projection', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    const meta = header('required-projection-cancelled', 100)
+    const started = Promise.withResolvers<undefined>()
+    providePersistence(ctx, {
+      list: () => Promise.resolve([meta]),
+      inspect: (_id: SessionId, signal?: AbortSignal) => new Promise((_, reject) => {
+        started.resolve(undefined)
+        signal?.addEventListener('abort', () => {
+          reject(signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason)))
+        }, { once: true })
+      }),
+    })
+    ctx.provide('sessionProjectionCache', {
+      cachedSnapshot: () => ({
+        asOfSeq: SessionSeq(0),
+        values: { sessionListMetadata: { blank: false, lastPromptAt: null } },
+      }),
+      hydratePrepared: vi.fn(),
+      coldSnapshot: vi.fn(),
+    } as never)
+    const remote = createSessionTestRemote(ctx, {
+      defaultModelSelection: () => ({ provider: 'p', model: 'm' }),
+      cwd: '/tmp',
+      requiredColdListProjectionKeys: ['test/required-cold-list'],
+    })
+    const abort = new AbortController()
+
+    const listing = remote.list(request({}), abort.signal)
+    await started.promise
+    abort.abort(new Error('cancelled by test'))
+
+    await expect(listing).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'gateway/cancelled' },
+    })
+    await ctx.fiber.dispose()
+  })
+
+  it('rejects empty and duplicate required cold-list projection keys', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    installSessionReadTestServices(ctx)
+
+    expect(() => new ApiSessionList(ctx, [''])).toThrow(/must not be empty/)
+    expect(() => new ApiSessionList(ctx, ['test/key', 'test/key'])).toThrow(/duplicate/)
+    await ctx.fiber.dispose()
+  })
+
+  it('prefers a live row attached during the query without folding its seed', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(AgentRegistry)
+    const meta = header('attached-during-list', 100)
+    const started = Promise.withResolvers<undefined>()
+    const release = Promise.withResolvers<undefined>()
+    providePersistence(ctx, {
+      list: async () => {
+        started.resolve(undefined)
+        await release.promise
+        return [meta]
+      },
+    })
+    const remote = createSessionTestRemote(ctx, { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp' })
+
+    const listing = remote.list(request({}))
+    await started.promise
+    const session = ctx.sessions.create(meta.id, {
+      seed: [
+        { type: 'turn/start', seq: SessionSeq(0), time: 200, data: { turn: 1 } },
+        {
+          type: 'user/message', seq: SessionSeq(1), time: 300,
+          data: createUserMessage({ content: [{ type: 'text', text: 'live' }], source: { kind: 'user' } }),
+          surfaceOp: 'append',
+        },
+      ],
+      meta: {
+        ...meta.cwd === undefined ? {} : { cwd: meta.cwd },
+        createdAt: meta.createdAt,
+      },
+    })
+    ctx.agents.register({ id: session.id, session, status: 'running', ctx } as Agent)
+    release.resolve(undefined)
+
+    const response = await listing
+    if (!response.ok) throw new Error('list failed')
+    expect(response.value.items).toEqual([
+      expect.objectContaining({
+        sessionId: meta.id,
+        blank: false,
+        running: true,
+        updatedAt: 100,
+      }),
+    ])
+  })
+
+  it('prefers a Session that attaches during its required projection refold', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(AgentRegistry)
+    const meta = header('attached-during-refold', 100)
+    providePersistence(ctx, {
+      list: () => Promise.resolve([meta]),
+      inspect: () => {
+        const session = ctx.sessions.create(meta.id, {
+          meta: { ...meta.cwd === undefined ? {} : { cwd: meta.cwd }, createdAt: meta.createdAt },
+          seed: [{ type: 'turn/start', seq: SessionSeq(0), time: 200, data: { turn: 1 } }],
+        })
+        ctx.agents.register({ id: session.id, session, status: 'running', ctx } as Agent)
+        return Promise.resolve({ meta, events: [] })
+      },
+    })
+    ctx.provide('sessionProjectionCache', {
+      cachedSnapshot: () => undefined,
+      cachedPredecessorTitle: () => undefined,
+    } as never)
+    const remote = createSessionTestRemote(ctx, {
+      defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp',
+      requiredColdListProjectionKeys: ['sessionListMetadata'],
+    })
+
+    const response = await remote.list(request({}))
+    if (!response.ok) throw new Error('list failed')
+    expect(response.value.items).toEqual([
+      expect.objectContaining({ sessionId: meta.id, running: true, blank: false }),
+    ])
+    await ctx.fiber.dispose()
+  })
+
+  it('serves an unsignalled cold cache miss without a projection cache', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(AgentRegistry)
+    const meta = header('uncached-cold', 100)
+    ctx.provide('sessionPersistence', testSessionPersistence(ctx, {
+      list: () => Promise.resolve([meta]),
+    }) as never)
+    installSessionReadTestServices(ctx)
+    const list = new ApiSessionList(ctx, [])
+    // The query engine binds its optional persistence service on a reactive
+    // fiber; settle that binding before the unsignalled list read.
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    await expect(list.list()).resolves.toEqual([
+      expect.objectContaining({ sessionId: meta.id, blank: false }),
+    ])
+    await ctx.fiber.dispose()
+  })
 })
 
 describe('attached updatedAt tracks human prompts', () => {

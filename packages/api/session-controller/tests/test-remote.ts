@@ -88,6 +88,7 @@ export interface TestSessionRemote {
 export interface TestSessionRemoteDefaults {
   readonly defaultModelSelection: () => AgentModelSelection
   readonly cwd: string
+  readonly requiredColdListProjectionKeys?: string[]
   readonly nativeOpen?: boolean
   readonly saveDefaultModelSelection?: (selection: AgentModelSelection) => void | Promise<void>
   readonly openPath?: (path: string, signal: AbortSignal) => Promise<void>
@@ -281,6 +282,9 @@ function installControllers(
     controller = new SessionController(
       ctx,
       {
+        ...defaults.requiredColdListProjectionKeys === undefined
+          ? {}
+          : { requiredColdListProjectionKeys: defaults.requiredColdListProjectionKeys },
         ...defaults.nativeOpen === undefined ? {} : { nativeOpen: defaults.nativeOpen },
       },
       {

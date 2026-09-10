@@ -23,6 +23,10 @@ const SAFE_SESSION_QUERY_FAILURES = {
     code: 'SESSION_QUERY_ABORTED',
     message: 'session query was cancelled',
   },
+  SESSION_QUERY_FORMAT_UNSUPPORTED: {
+    code: 'SESSION_QUERY_FORMAT_UNSUPPORTED',
+    message: 'the current runtime cannot interpret this session history',
+  },
   SESSION_QUERY_CORRUPT_SESSION: {
     code: 'SESSION_QUERY_CORRUPT_SESSION',
     message: 'session event history is corrupt',

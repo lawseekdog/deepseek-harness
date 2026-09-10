@@ -14,7 +14,7 @@ export class TestSessionQueryEngine extends SessionQueryEngine {
     _request: SessionSearchRequest,
     _exec?: SessionSearchExecContext,
   ): Promise<SessionSearchPage<SessionSearchHit>> {
-    return Promise.resolve({ items: [] })
+    return Promise.resolve({ coverage: 'complete', unsupported_sessions: [], items: [] })
   }
 
   override async searchEvents(
@@ -22,6 +22,7 @@ export class TestSessionQueryEngine extends SessionQueryEngine {
     _exec?: SessionSearchExecContext,
   ): Promise<SessionEventSearchPage> {
     return {
+      coverage: 'complete', unsupported_sessions: [],
       session: (await this.readSurface(request.sessionId)).session,
       items: [],
     }

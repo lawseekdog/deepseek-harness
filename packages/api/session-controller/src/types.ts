@@ -171,10 +171,28 @@ export interface SessionSummary {
   readonly projections?: SessionProjectionHints
 }
 
-/** One session-content search result. */
+/** Durable source of one Session search match. */
+export type SessionSearchMatch =
+  | {
+    /** The current official title projection matched the query. */
+    readonly kind: 'title'
+    /** Exact projection cut that supplied the title. */
+    readonly projectionAsOfSeq: number
+  }
+  | {
+    /** One current-surface conversation message matched the query. */
+    readonly kind: 'message'
+    /** Exact matching Session event seq. */
+    readonly seq: number
+    /** Exact matching message event type. */
+    readonly type: 'user/message' | 'assistant/message'
+  }
+
+/** One Session title-or-content search result. */
 export interface SessionSearchItem {
   readonly sessionId: SessionId
   readonly snippet: string
+  readonly match: SessionSearchMatch
 }
 
 /** Maximum number of Sessions returned by one search. */
@@ -251,10 +269,17 @@ export interface SessionListValue {
 /** Session search request. */
 export interface SessionSearchRequest {
   readonly query: string
+  /** Host-authorized Session ids applied to title and message search. */
+  readonly sessionIds?: readonly SessionId[]
 }
 
 /** Session search response value. */
 export interface SessionSearchValue {
+  readonly coverage: 'complete' | 'incomplete'
+  readonly unsupported_sessions: readonly {
+    readonly sessionId: SessionId
+    readonly reason: 'SESSION_FORMAT_UNSUPPORTED'
+  }[]
   readonly items: readonly SessionSearchItem[]
   readonly hasMore: boolean
 }

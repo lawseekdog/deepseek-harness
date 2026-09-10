@@ -212,7 +212,12 @@ describe('search', () => {
   it('returns bounded Host results and forwards the caller signal', async () => {
     const api = new FakeApiClient()
     api.onSearch = () => Promise.resolve(ok({
-      items: [{ sessionId: S1, snippet: 'matching excerpt' }],
+      coverage: 'incomplete', unsupported_sessions: [{ sessionId: S2, reason: 'SESSION_FORMAT_UNSUPPORTED' }],
+      items: [{
+        sessionId: S1,
+        snippet: 'matching excerpt',
+        match: { kind: 'message' as const, seq: SessionSeq(7), type: 'user/message' as const },
+      }],
       hasMore: true,
     }))
     const manager = new SessionManager(fakeRemote(api))
@@ -221,7 +226,12 @@ describe('search', () => {
     await expect(manager.search('exact phrase', signal)).resolves.toEqual({
       ok: true,
       value: {
-        items: [{ sessionId: S1, snippet: 'matching excerpt' }],
+        coverage: 'incomplete', unsupported_sessions: [{ sessionId: S2, reason: 'SESSION_FORMAT_UNSUPPORTED' }],
+        items: [{
+          sessionId: S1,
+          snippet: 'matching excerpt',
+          match: { kind: 'message', seq: 7, type: 'user/message' },
+        }],
         hasMore: true,
       },
     })

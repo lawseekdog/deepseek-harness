@@ -120,12 +120,13 @@ class FakeQuery extends SessionQueryEngine {
   static sessionSearch: (
     request: SessionSearchRequest,
     exec?: SessionSearchExecContext,
-  ) => Promise<SessionSearchPage<SessionSearchHit>> = () => Promise.resolve({ items: [] })
+  ) => Promise<SessionSearchPage<SessionSearchHit>> = () => Promise.resolve({ coverage: 'complete', unsupported_sessions: [], items: [] })
 
   static eventSearch: (
     request: SessionEventSearchRequest,
     exec?: SessionSearchExecContext,
   ) => Promise<SessionEventSearchPage> = request => Promise.resolve({
+    coverage: 'complete', unsupported_sessions: [],
     session: header(request.sessionId, '/work'),
     items: [],
   })
@@ -136,8 +137,9 @@ class FakeQuery extends SessionQueryEngine {
   static titles = new Map<SessionIdValue, string | Error>()
 
   static reset(): void {
-    this.sessionSearch = () => Promise.resolve({ items: [] })
+    this.sessionSearch = () => Promise.resolve({ coverage: 'complete', unsupported_sessions: [], items: [] })
     this.eventSearch = request => Promise.resolve({
+      coverage: 'complete', unsupported_sessions: [],
       session: header(request.sessionId, '/work'),
       items: [],
     })
@@ -622,6 +624,7 @@ describe('workspace authority and lineage redaction', () => {
       hiddenParent.id,
     )
     FakeQuery.sessionSearch = () => Promise.resolve({
+      coverage: 'complete', unsupported_sessions: [],
       items: [sessionHit(visibleChild.id, '/work', 'must not be discoverable', hiddenParent.id)],
     })
 
@@ -1155,6 +1158,7 @@ describe('workspace authority and lineage redaction', () => {
     const movedHeader = header(target.id, '/outside')
 
     FakeQuery.eventSearch = () => Promise.resolve({
+      coverage: 'complete', unsupported_sessions: [],
       session: movedHeader,
       items: [eventHit(target.id, SessionSeq(0), 'secret event hit')],
     })
@@ -1190,6 +1194,7 @@ describe('workspace authority and lineage redaction', () => {
       .toBe('SESSION_QUERY_TOOL_UNAUTHORIZED')
 
     FakeQuery.sessionSearch = () => Promise.resolve({
+      coverage: 'complete', unsupported_sessions: [],
       items: [sessionHit(target.id, '/work', 'safe hit')],
     })
     vi.spyOn(mounted.ctx.sessionQuery, 'readTitleSnapshots').mockResolvedValueOnce([{
@@ -1252,6 +1257,7 @@ describe('search paging, prior-history bounds, titles, and cancellation', () => 
     FakeQuery.sessionSearch = (request) => {
       if (request.cursor === undefined) {
         return Promise.resolve({
+          coverage: 'complete', unsupported_sessions: [],
           items: [
             sessionHit('caller', '/work'),
             sessionHit('unauthorized', '/outside'),
@@ -1261,11 +1267,13 @@ describe('search paging, prior-history bounds, titles, and cancellation', () => 
       }
       if (request.cursor === c1) {
         return Promise.resolve({
+          coverage: 'complete', unsupported_sessions: [],
           items: [sessionHit('a', '/work', 'first', outside.id)],
           nextCursor: c2,
         })
       }
       return Promise.resolve({
+        coverage: 'complete', unsupported_sessions: [],
         items: [
           sessionHit('b', '/work', 'second'),
           sessionHit('additional-authorized', '/work', 'third'),
@@ -1290,10 +1298,12 @@ describe('search paging, prior-history bounds, titles, and cancellation', () => 
     const cursor = SessionSearchCursor('rejected-tail')
     FakeQuery.sessionSearch = request => request.cursor === undefined
       ? Promise.resolve({
+        coverage: 'complete', unsupported_sessions: [],
         items: [sessionHit('authorized', '/work')],
         nextCursor: cursor,
       })
       : Promise.resolve({
+        coverage: 'complete', unsupported_sessions: [],
         items: [
           sessionHit(mounted.caller.id, '/work'),
           sessionHit('outside', '/outside'),
@@ -1543,7 +1553,7 @@ describe('search paging, prior-history bounds, titles, and cancellation', () => 
     const mounted = await mount({ maxSearchResults: 2 })
     const cursor = SessionSearchCursor('stale-next')
     FakeQuery.sessionSearch = request => request.cursor === undefined
-      ? Promise.resolve({ items: [], nextCursor: cursor })
+      ? Promise.resolve({ coverage: 'complete', unsupported_sessions: [], items: [], nextCursor: cursor })
       : Promise.reject(new SessionQueryError('stale provider generation', 'SESSION_QUERY_STALE_CURSOR'))
     const result = await mounted.call('session_search', { query: 'needle' })
     expect(errorCode(result)).toBe('SESSION_QUERY_STALE_CURSOR')
@@ -1554,7 +1564,7 @@ describe('search paging, prior-history bounds, titles, and cancellation', () => 
   it('rejects a repeated internal cursor instead of looping', async () => {
     const mounted = await mount()
     const cursor = SessionSearchCursor('repeat')
-    FakeQuery.sessionSearch = () => Promise.resolve({ items: [], nextCursor: cursor })
+    FakeQuery.sessionSearch = () => Promise.resolve({ coverage: 'complete', unsupported_sessions: [], items: [], nextCursor: cursor })
     const result = await mounted.call('session_search', { query: 'needle' })
     expect(errorCode(result)).toBe('SESSION_QUERY_INVALID_CURSOR')
     expect(text(result)).toBe('Error: session-search provider repeated a continuation cursor')
@@ -1567,6 +1577,7 @@ describe('search paging, prior-history bounds, titles, and cancellation', () => 
     const child = createSession(mounted.ctx, 'child', '/work', 2, parent.id)
     const callerChild = createSession(mounted.ctx, 'caller-child', '/work', 3, mounted.caller.id)
     FakeQuery.sessionSearch = () => Promise.resolve({
+      coverage: 'complete', unsupported_sessions: [],
       items: [
         { ...sessionHit(child.id, '/work', 'both', parent.id), live: true, persisted: true },
         { ...sessionHit(callerChild.id, '/work', 'persisted', mounted.caller.id), live: false, persisted: true },
@@ -1584,6 +1595,7 @@ describe('search paging, prior-history bounds, titles, and cancellation', () => 
   it('intersects current-session search with the event before the latest step and leaves other targets unchanged', async () => {
     const mounted = await mount()
     FakeQuery.eventSearch = request => Promise.resolve({
+      coverage: 'complete', unsupported_sessions: [],
       session: header(request.sessionId, '/work'),
       items: [eventHit(request.sessionId, SessionSeq(1))],
     })
@@ -1629,11 +1641,13 @@ describe('search paging, prior-history bounds, titles, and cancellation', () => 
     const cursor = SessionSearchCursor('events-next')
     FakeQuery.eventSearch = request => request.cursor === undefined
       ? Promise.resolve({
+        coverage: 'complete', unsupported_sessions: [],
         session: header(other.id, '/work'),
         items: [eventHit(other.id, SessionSeq(1))],
         nextCursor: cursor,
       })
       : Promise.resolve({
+        coverage: 'complete', unsupported_sessions: [],
         session: header(other.id, '/work'),
         items: [eventHit(other.id, SessionSeq(2)), eventHit(other.id, SessionSeq(3))],
       })
@@ -1670,7 +1684,7 @@ describe('search paging, prior-history bounds, titles, and cancellation', () => 
     const hit = createSession(mounted.ctx, 'hit', '/work')
     const failure = new HarnessError('title backend failed', 'TITLE_BACKEND')
     FakeQuery.titles.set(hit.id, failure)
-    FakeQuery.sessionSearch = () => Promise.resolve({ items: [sessionHit(hit.id, '/work')] })
+    FakeQuery.sessionSearch = () => Promise.resolve({ coverage: 'complete', unsupported_sessions: [], items: [sessionHit(hit.id, '/work')] })
     const warn = vi.spyOn(mounted.ctx.logger, 'warn').mockImplementation(() => undefined)
     const result = await mounted.call('session_search', { query: 'needle' })
     expect(result.isError).toBe(false)
@@ -1692,6 +1706,7 @@ describe('search paging, prior-history bounds, titles, and cancellation', () => 
         { sessionId: second.id, status: 'rejected', reason: stackless },
       ])
     FakeQuery.sessionSearch = () => Promise.resolve({
+      coverage: 'complete', unsupported_sessions: [],
       items: [
         sessionHit(first.id, '/work'),
         sessionHit(second.id, '/work'),
@@ -1721,7 +1736,7 @@ describe('search paging, prior-history bounds, titles, and cancellation', () => 
         },
       },
     )
-    FakeQuery.sessionSearch = () => Promise.resolve({ items: [sessionHit(hit.id, '/work')] })
+    FakeQuery.sessionSearch = () => Promise.resolve({ coverage: 'complete', unsupported_sessions: [], items: [sessionHit(hit.id, '/work')] })
     vi.spyOn(mounted.ctx.sessionQuery, 'readTitleSnapshots').mockResolvedValueOnce([{
       sessionId: hit.id,
       status: 'rejected',
@@ -1742,7 +1757,7 @@ describe('search paging, prior-history bounds, titles, and cancellation', () => 
     const mounted = await mount()
     const hit = createSession(mounted.ctx, 'thrown-title-failure', '/work')
     const secret = 'title batch failed beside hidden-title-session-secret'
-    FakeQuery.sessionSearch = () => Promise.resolve({ items: [sessionHit(hit.id, '/work')] })
+    FakeQuery.sessionSearch = () => Promise.resolve({ coverage: 'complete', unsupported_sessions: [], items: [sessionHit(hit.id, '/work')] })
     vi.spyOn(mounted.ctx.sessionQuery, 'readTitleSnapshots')
       .mockRejectedValueOnce(new Error(secret))
     const warn = vi.spyOn(mounted.ctx.logger, 'warn').mockImplementation(() => undefined)
@@ -1760,7 +1775,7 @@ describe('search paging, prior-history bounds, titles, and cancellation', () => 
     const hit = createSession(mounted.ctx, 'abort-title', '/work')
     const controller = new AbortController()
     const cancellation = new Error('cancelled title batch')
-    FakeQuery.sessionSearch = () => Promise.resolve({ items: [sessionHit(hit.id, '/work')] })
+    FakeQuery.sessionSearch = () => Promise.resolve({ coverage: 'complete', unsupported_sessions: [], items: [sessionHit(hit.id, '/work')] })
     let started!: () => void
     const batchStarted = new Promise<void>((resolve) => { started = resolve })
     const readTitles = vi.spyOn(mounted.ctx.sessionQuery, 'readTitleSnapshots').mockImplementation((_ids, signal) => {
@@ -1785,7 +1800,7 @@ describe('search paging, prior-history bounds, titles, and cancellation', () => 
       'title observation became unauthorized',
       'SESSION_QUERY_TOOL_UNAUTHORIZED',
     )
-    FakeQuery.sessionSearch = () => Promise.resolve({ items: [sessionHit(hit.id, '/work')] })
+    FakeQuery.sessionSearch = () => Promise.resolve({ coverage: 'complete', unsupported_sessions: [], items: [sessionHit(hit.id, '/work')] })
     vi.spyOn(mounted.ctx.sessionQuery, 'readTitleSnapshots').mockResolvedValueOnce([{
       sessionId: hit.id,
       status: 'rejected',
@@ -1862,6 +1877,7 @@ describe('search paging, prior-history bounds, titles, and cancellation', () => 
     const mounted = await mount({ searchTimeoutMs: timeoutMs }, '/work', true)
     const parent = createSession(mounted.ctx, 'stalled-parent-authorization', '/work')
     FakeQuery.sessionSearch = () => Promise.resolve({
+      coverage: 'complete', unsupported_sessions: [],
       items: [sessionHit('authorized-child', '/work', 'needle', parent.id)],
     })
     const upstream = new AbortController()
@@ -2098,5 +2114,21 @@ describe('trace and exact read rendering', () => {
   ])('rejects invalid exact-read integers for %s', async (name, args, expected = 'SESSION_QUERY_INVALID_FILTER') => {
     const mounted = await mount()
     expect(errorCode(await mounted.call(name, args))).toBe(expected)
+  })
+})
+
+
+describe('incomplete model search coverage', () => {
+  it('states incomplete coverage even for no matches without disclosing unsupported ids', async () => {
+    const mounted = await mount()
+    FakeQuery.sessionSearch = () => Promise.resolve({
+      items: [], coverage: 'incomplete', unsupported_sessions: [
+        { sessionId: SessionId('private-other-tenant'), reason: 'SESSION_FORMAT_UNSUPPORTED' },
+      ],
+    })
+    const result = await mounted.call('session_search', { query: 'needle' })
+    expect(result.isError).toBe(false)
+    expect(text(result)).toBe('Search coverage is incomplete: some session history could not be read. These results do not cover all history.\n\nNo prior session matches found.')
+    expect(text(result)).not.toContain('private-other-tenant')
   })
 })

@@ -1,3 +1,4 @@
+import type { SessionSearchValue } from '../../types.ts'
 /**
  * The outward sessions-service face — what `ctx.sessions` exposes to feature
  * packages. Transport entry points and implementation internals stay on
@@ -10,7 +11,6 @@ import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { WorkspaceId } from '@deepseek-ai/dsh-workspace/types'
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 import type { AgentContext } from '../scope.ts'
-import type { SessionSearchResultItem } from '../sessions/manager.ts'
 import type { SessionBinding, SessionListState } from '../sessions/service.ts'
 import type { SessionFace } from './session.ts'
 import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
@@ -74,7 +74,7 @@ export interface ISessions {
    */
   refresh(): Promise<void>
   /**
-   * Search the Host's visible message-content index. Results stay
+   * Search the Host's visible Session titles and message-content index. Results stay
    * request-local; the list snapshot remains the metadata authority.
    * @param query - non-blank literal phrase.
    * @param signal - cancellation for a superseded search.
@@ -83,7 +83,7 @@ export interface ISessions {
   search(
     query: string,
     signal: AbortSignal,
-  ): Promise<RemoteResult<{ items: SessionSearchResultItem[]; hasMore: boolean }>>
+  ): Promise<RemoteResult<SessionSearchValue>>
   /**
    * Fork a session from a completed-turn prefix of the source; on resolution
    * the child is in the list store and `open()` can target it.

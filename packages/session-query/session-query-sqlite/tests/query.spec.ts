@@ -9,6 +9,7 @@ import {
   makeSnippet,
   normalizeEventRequest,
   normalizeSessionRequest,
+  prepareFtsText,
   quoteFtsData,
   requestFingerprint,
   SQLITE_FTS5_OUTER_PREDICATE_LIMIT,
@@ -16,6 +17,7 @@ import {
   type NormalizedEventRequest,
   type NormalizedSessionRequest,
 } from '../src/query.ts'
+import { FTS_HAN_BOUNDARY } from '../src/schema.ts'
 
 const limits = { defaultLimit: 2, maxLimit: 3 }
 
@@ -205,6 +207,15 @@ describe('SQLite search predicate compilation', () => {
 describe('SQLite query identity and presentation', () => {
   it('quotes all caller MATCH syntax as data', () => {
     expect(quoteFtsData('say "needle" OR *')).toBe('"say ""needle"" OR *"')
+  })
+
+  it('segments Han text symmetrically without exposing index boundaries in snippets', () => {
+    expect(prepareFtsText('alpha刑事案件beta'))
+      .toBe(`alpha${FTS_HAN_BOUNDARY}刑${FTS_HAN_BOUNDARY}事${FTS_HAN_BOUNDARY}案${FTS_HAN_BOUNDARY}件${FTS_HAN_BOUNDARY}beta`)
+    expect(makeSnippet(
+      `分析${FTS_HAN_BOUNDARY}${FTS_HIGHLIGHT_START}刑${FTS_HAN_BOUNDARY}事${FTS_HIGHLIGHT_END}${FTS_HAN_BOUNDARY}案件`,
+      20,
+    )).toBe('分析刑事案件')
   })
 
   it('canonicalizes request and filter ordering in both scopes', () => {

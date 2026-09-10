@@ -10,7 +10,10 @@ import type { DatabaseSync } from 'node:sqlite'
 import { Context, Service, type Fiber } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type { Session, SessionEvent, SessionHeader, SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
-import type SessionPersistence from '@deepseek-ai/dsh-session-persistence'
+import {
+  type default as SessionPersistence,
+  SessionFormatUnsupportedError,
+} from '@deepseek-ai/dsh-session-persistence'
 import type {
   SessionPersistenceRevision,
   SessionPersistenceSnapshot,
@@ -31,6 +34,7 @@ import type {
   SessionEventSearchHit,
   SessionEventSearchPage,
   SessionEventSearchRequest,
+  SessionSearchCoverage,
   SessionSearchExecContext,
   SessionSearchHit,
   SessionSearchCursor as SessionSearchCursorValue,
@@ -53,9 +57,9 @@ import {
   makeSnippet,
   normalizeEventRequest,
   normalizeSessionRequest,
+  prepareFtsText,
   quoteFtsData,
   requestFingerprint,
-  sanitizeFtsText,
   SQLITE_MAX_PAGE_LIMIT,
 } from './query.ts'
 
@@ -152,6 +156,7 @@ interface Observation {
   persistenceBinding: PersistenceBinding
   persisted: Map<SessionId, ObservedPersistedSession>
   live: Map<SessionId, ObservedSession>
+  unsupported: Map<SessionId, ObservedPersistedSession>
 }
 
 interface IndexedPersistedRow {
@@ -233,6 +238,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
   private _lastPersistenceIdentity: symbol | undefined
   private _persistenceEpoch = 0
   private _globalGeneration = 0
+  private _coverageFingerprint = ''
   private _localGeneration = 0
   private _tail: Promise<void> = Promise.resolve()
   private _closed = false
@@ -274,7 +280,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     const signal = exec?.signal
     return this._serialized(signal, async () => {
       await this._ensureReady(signal)
-      const persistenceBinding = await this._reconcile(signal)
+      const { persistenceBinding, unsupported } = await this._reconcile(signal)
       assertNotAborted(signal)
       const generation = String(this._globalGeneration)
       const fingerprint = requestFingerprint(normalized)
@@ -282,14 +288,17 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
         ? 0
         : decodeCursor(normalized.cursor, this._instance, 'sessions', fingerprint, generation)
       const rows = this._querySessions(normalized, offset, persistenceBinding)
-      return page(rows, normalized.limit, row => this._sessionHit(row), cursorOffset => encodeCursor({
-        version: 1,
-        instance: this._instance,
-        scope: 'sessions',
-        fingerprint,
-        generation,
-        offset: cursorOffset,
-      }), offset)
+      return {
+        ...searchCoverage(unsupported),
+        ...page(rows, normalized.limit, row => this._sessionHit(row), cursorOffset => encodeCursor({
+          version: 1,
+          instance: this._instance,
+          scope: 'sessions',
+          fingerprint,
+          generation,
+          offset: cursorOffset,
+        }), offset),
+      }
     })
   }
 
@@ -302,8 +311,11 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     const signal = exec?.signal
     return this._serialized(signal, async () => {
       await this._ensureReady(signal)
-      const persistenceBinding = await this._reconcile(signal)
+      const { persistenceBinding, unsupported } = await this._reconcile(signal)
       assertNotAborted(signal)
+      if (unsupported.has(normalized.sessionId)) {
+        throw new SessionQueryError('target Session format is unsupported', 'SESSION_QUERY_FORMAT_UNSUPPORTED')
+      }
       const target = this._targetObservation(normalized.sessionId, persistenceBinding)
       const fingerprint = requestFingerprint(normalized)
       const offset = normalized.cursor === undefined
@@ -312,6 +324,8 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       const rows = this._queryEvents(normalized, offset, persistenceBinding)
       return {
         session: target.header,
+        coverage: 'complete',
+        unsupported_sessions: [],
         ...page(rows, normalized.limit, row => this._eventHit(row), cursorOffset => encodeCursor({
           version: 1,
           instance: this._instance,
@@ -404,7 +418,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     }
   }
 
-  private async _reconcile(signal: AbortSignal | undefined): Promise<PersistenceBinding> {
+  private async _reconcile(signal: AbortSignal | undefined): Promise<Observation> {
     assertNotAborted(signal)
     const db = this._requireDb()
     const persistedRows = db.prepare(
@@ -422,7 +436,8 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       : [...observation.persisted.values()].filter(entry => entry.loaded !== undefined)
     const persistentDeletes = observation.persistenceBinding.service === undefined
       ? []
-      : persistedRows.filter(row => !observation.persisted.has(row.id as SessionId))
+      : persistedRows.filter(row => !observation.persisted.has(row.id as SessionId)
+        || observation.unsupported.has(row.id as SessionId))
     const liveChanges = [...observation.live.values()].filter((entry) => {
       const indexed = liveById.get(entry.header.id)
       const persisted = observation.persisted.has(entry.header.id) ? 1 : 0
@@ -485,11 +500,15 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       }
     }
 
-    if (hasWrites || pointerChanged) this._globalGeneration += 1
+    const coverageFingerprint = JSON.stringify([...observation.unsupported.values()]
+      .sort((a, b) => a.header.id.localeCompare(b.header.id))
+      .map(entry => [entry.header.id, entry.revision]))
+    if (hasWrites || pointerChanged || coverageFingerprint !== this._coverageFingerprint) this._globalGeneration += 1
+    this._coverageFingerprint = coverageFingerprint
     if (pointerChanged) this._persistenceEpoch += 1
     this._localGeneration = nextLocalGeneration
     this._lastPersistenceIdentity = observation.persistenceBinding.identity
-    return observation.persistenceBinding
+    return observation
   }
 
   private async _observeStable(
@@ -502,10 +521,12 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       const persistence = persistenceBinding.service
       const initiallyLive = new Set(this.ctx.sessions.list().map(session => session.id))
       let persisted = new Map<SessionId, ObservedPersistedSession>()
+      const unsupported = new Map<SessionId, ObservedPersistedSession>()
       if (persistence !== undefined) {
         try {
-          const canReuseIndexed = this._lastPersistenceIdentity === undefined
-            || this._lastPersistenceIdentity === persistenceBinding.identity
+          // A persisted index does not prove that this runtime still understands a log.
+          // Revalidate on first observation after restart or a persistence-provider change.
+          const canReuseIndexed = this._lastPersistenceIdentity === persistenceBinding.identity
           const listOptions = signal === undefined ? undefined : { signal }
           const before = await persistence.list(listOptions)
           assertNotAborted(signal)
@@ -519,10 +540,28 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
             // live-preferred.
             if (initiallyLive.has(entry.header.id) || this.ctx.sessions.get(entry.header.id) !== undefined) continue
             assertNotAborted(signal)
-            const loaded = await readColdSessionLog(persistence, entry.header.id, signal)
+            let loaded
+            try {
+              // `readColdSessionLog` propagates persistence failures unmapped, so the
+              // refusals the corpus may omit stay distinguishable from real failures.
+              loaded = await readColdSessionLog(persistence, entry.header.id, signal)
+            } catch (error: unknown) {
+              assertNotAborted(signal)
+              // Only an explicit format refusal leaves the Session out of the index.
+              // Corruption, I/O, enumeration, and cancellation stay whole-search failures.
+              if (!(error instanceof SessionFormatUnsupportedError)) throw error
+              unsupported.set(entry.header.id, entry)
+              continue
+            }
             assertNotAborted(signal)
             assertSessionHeadersCompatible(entry.header, loaded.header)
-            entry.loaded = observeSession(loaded.header, loaded.inheritedEventCount, loaded.events)
+            if (this._lastPersistenceIdentity === undefined
+              && indexed.get(entry.header.id)?.revision === entry.revision) continue
+            entry.loaded = observeSession(
+              loaded.header,
+              loaded.inheritedEventCount,
+              loaded.events,
+            )
           }
           assertNotAborted(signal)
           const afterSnapshots = await persistence.list(listOptions)
@@ -553,7 +592,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
         live.set(session.id, observed)
       }
       if (!sameSessionIds(initiallyLive, live)) continue
-      return { persistenceBinding, persisted, live }
+      return { persistenceBinding, persisted, live, unsupported }
     }
     throw new SessionQueryError(
       'session-search persistence observation did not stabilize after one retry',
@@ -600,7 +639,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `)
     for (const document of entry.documents) {
-      const text = sanitizeFtsText(document.text)
+      const text = prepareFtsText(document.text)
       insert.run(
         text,
         document.sessionId,
@@ -608,7 +647,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
         document.type,
         document.time,
         document.surface,
-        Array.from(text).length,
+        Array.from(document.text).length,
       )
     }
   }
@@ -631,7 +670,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `)
     for (const document of entry.documents) {
-      const text = sanitizeFtsText(document.text)
+      const text = prepareFtsText(document.text)
       insert.run(
         text,
         document.sessionId,
@@ -639,7 +678,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
         document.type,
         document.time,
         document.surface,
-        Array.from(text).length,
+        Array.from(document.text).length,
       )
     }
   }
@@ -854,7 +893,7 @@ function selectedDocumentsSql(): { sql: string } {
 }
 
 function selectedDocumentsParams(query: string, persistenceVisible: boolean): Array<string | number> {
-  const expression = quoteFtsData(query)
+  const expression = quoteFtsData(prepareFtsText(query))
   const visible = persistenceVisible ? 1 : 0
   return [
     FTS_HIGHLIGHT_START,
@@ -959,13 +998,22 @@ function rowHeader(row: SessionHeaderRow): SessionHeader {
   }
 }
 
+function searchCoverage(unsupported: ReadonlyMap<SessionId, ObservedPersistedSession>): SessionSearchCoverage {
+  return {
+    coverage: unsupported.size === 0 ? 'complete' : 'incomplete',
+    unsupported_sessions: [...unsupported.keys()].sort().map(sessionId => ({
+      sessionId, reason: 'SESSION_FORMAT_UNSUPPORTED',
+    })),
+  }
+}
+
 function page<Row, Item>(
   rows: readonly Row[],
   limit: number,
   convert: (row: Row) => Item,
   nextCursor: (offset: number) => SessionSearchCursorValue,
   offset: number,
-): SessionSearchPage<Item> {
+): Omit<SessionSearchPage<Item>, keyof SessionSearchCoverage> {
   const hasMore = rows.length > limit
   return {
     items: rows.slice(0, limit).map(convert),

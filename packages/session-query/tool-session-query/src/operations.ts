@@ -14,6 +14,7 @@ import {
   type SessionEventSurface,
   type SessionRecord,
   type SessionSearchCursor,
+  type SessionSearchPage,
 } from '@deepseek-ai/dsh-session-query'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { toolInput } from './input.ts'
@@ -48,6 +49,7 @@ interface EventReadArgs extends EventTargetArgs {
 }
 
 interface SearchCollection<T> {
+  readonly coverage: 'complete' | 'incomplete'
   readonly items: T[]
   readonly capped: boolean
 }
@@ -111,7 +113,10 @@ async function executeSessionSearch(
     collected.items.map(hit => hit.header.id),
     exec.signal,
   )
-  return presentation.formatSessionSearch(collected, titles, authorizedParents)
+  const output = presentation.formatSessionSearch(collected, titles, authorizedParents)
+  return collected.coverage === 'incomplete'
+    ? `Search coverage is incomplete: some session history could not be read. These results do not cover all history.\n\n${output}`
+    : output
 }
 
 async function executeEventSearch(
@@ -244,27 +249,26 @@ async function executeEventRead(
 async function collectPages<T>(
   maxResults: number,
   signal: AbortSignal,
-  request: (cursor?: SessionSearchCursor) => Promise<{
-    readonly items: readonly T[]
-    readonly nextCursor?: SessionSearchCursor
-  }>,
+  request: (cursor?: SessionSearchCursor) => Promise<SessionSearchPage<T>>,
   accept: (item: T) => boolean,
 ): Promise<SearchCollection<T>> {
   const items: T[] = []
   const seen = new Set<SessionSearchCursor>()
   let cursor: SessionSearchCursor | undefined
+  let coverage: 'complete' | 'incomplete' = 'complete'
   while (true) {
     signal.throwIfAborted()
     const page = await request(cursor)
     signal.throwIfAborted()
+    if (page.coverage === 'incomplete') coverage = 'incomplete'
     for (const item of page.items) {
       if (!accept(item)) continue
       if (items.length === maxResults) {
-        return { items, capped: true }
+        return { items, capped: true, coverage }
       }
       items.push(item)
     }
-    if (page.nextCursor === undefined) return { items, capped: false }
+    if (page.nextCursor === undefined) return { items, capped: false, coverage }
     if (seen.has(page.nextCursor)) {
       throw new SessionQueryError(
         'session-search provider repeated a continuation cursor',

@@ -1,3 +1,4 @@
+import type { SessionSearchItem, SessionSearchValue } from '../../types.ts'
 // SessionManager: the instance cluster Map<SessionId, Session> (lazy-built, resident) + the frame
 // dispatch entry + list state, constructed and held by ClientSessions (one per browser client).
 // List data never enters zustand; React connects via subscribe/getListSnapshot.
@@ -40,11 +41,8 @@ function sessionSeqCursor(value: number): SessionSeqCursor {
  */
 export type SessionListPhase = 'pending' | 'ready'
 
-/** Request-local content hit returned to sidebar search consumers. */
-export interface SessionSearchResultItem {
-  sessionId: SessionId
-  snippet: string
-}
+/** Request-local title-or-content hit returned to sidebar search consumers. */
+export type SessionSearchResultItem = SessionSearchItem
 
 /** Immutable session-list snapshot for useSessionList. */
 export interface SessionListSnapshot {
@@ -522,8 +520,8 @@ export class SessionManager {
   }
 
   /**
-   * Search visible session message content without adding transient query
-   * state to the list snapshot.
+   * Search visible Session titles and message content without adding transient
+   * query state to the list snapshot.
    * @param query - non-blank literal phrase.
    * @param signal - cancellation for superseded UI queries.
    * @returns the Host result or a folded transport error.
@@ -531,14 +529,16 @@ export class SessionManager {
   async search(
     query: string,
     signal: AbortSignal,
-  ): Promise<RemoteResult<{ items: SessionSearchResultItem[]; hasMore: boolean }>> {
+  ): Promise<RemoteResult<SessionSearchValue>> {
     const result = await this.remote.session.search({ query }, signal)
     if (!result.ok) return result
     return {
       ok: true,
       value: {
-        items: [...result.value.items],
+        items: result.value.items.map(item => ({ ...item, match: { ...item.match } })),
         hasMore: result.value.hasMore,
+        coverage: result.value.coverage,
+        unsupported_sessions: result.value.unsupported_sessions.map(item => ({ ...item })),
       },
     }
   }

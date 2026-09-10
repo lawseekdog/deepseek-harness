@@ -305,9 +305,13 @@ it('registers exact and abstract search behavior under one ctx key', async () =>
   await ctx.plugin(SessionProjectionRegistry)
   const fiber = await ctx.plugin(TestSessionQueryEngine)
   const session = ctx.sessions.create(id)
-  await expect(ctx.sessionQuery.searchSessions({ query: 'AI' })).resolves.toEqual({ items: [] })
+  await expect(ctx.sessionQuery.searchSessions({ query: 'AI' })).resolves.toEqual({
+    coverage: 'complete', unsupported_sessions: [], items: [],
+  })
   await expect(ctx.sessionQuery.searchEvents({ sessionId: id, query: 'AI' }))
-    .resolves.toEqual({ session: session.header, items: [] })
+    .resolves.toEqual({
+      coverage: 'complete', unsupported_sessions: [], session: session.header, items: [],
+    })
   await fiber.dispose()
   expect(ctx.sessionQuery).toBeUndefined()
 })

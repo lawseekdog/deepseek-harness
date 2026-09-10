@@ -5,7 +5,10 @@ import { mkdir, open } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 
 /** Current derived-index schema version. Incompatible versions reset in place. */
-export const SESSION_QUERY_SQLITE_SCHEMA_VERSION = 8
+export const SESSION_QUERY_SQLITE_SCHEMA_VERSION = 9
+
+/** Reserved noncharacter configured as the internal Han token separator. */
+export const FTS_HAN_BOUNDARY = '\uFDD2'
 
 /** SQLite application id protecting unrelated databases from derived resets. */
 export const SESSION_QUERY_SQLITE_APPLICATION_ID = 0x44534851
@@ -132,7 +135,7 @@ function ensurePersistentSchema(db: DatabaseSync): void {
       time UNINDEXED,
       surface UNINDEXED,
       codepoint_length UNINDEXED,
-      tokenize = 'unicode61'
+      tokenize = "unicode61 separators '${FTS_HAN_BOUNDARY}'"
     )
   `)
   db.exec(`PRAGMA user_version = ${SESSION_QUERY_SQLITE_SCHEMA_VERSION}`)
@@ -163,7 +166,7 @@ function ensureTemporarySchema(db: DatabaseSync): void {
       time UNINDEXED,
       surface UNINDEXED,
       codepoint_length UNINDEXED,
-      tokenize = 'unicode61'
+      tokenize = "unicode61 separators '${FTS_HAN_BOUNDARY}'"
     )
   `)
 }

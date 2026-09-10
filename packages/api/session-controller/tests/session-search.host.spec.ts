@@ -11,6 +11,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import SessionStore, { SESSION_FORMAT_VERSION, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
+import SessionTitleService from '@deepseek-ai/dsh-session-title'
 import {
   SessionQueryEngine,
   SessionQueryError,
@@ -22,16 +23,17 @@ import { ApiSessionList } from '../src/list.ts'
 
 const sid = (value: string): SessionId => value as SessionId
 const defaults = { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp' }
+const titleConfig = { fallbackMaxWords: 5, fallbackMaxBytes: 40, maxTitleBytes: 80 }
 
 function request(query: string): { query: string } {
   return { query }
 }
 
-function header(id: string, cwd: string | null = '/project'): SessionHeader {
+function header(id: string, cwd: string | null = '/project', createdAt = 100): SessionHeader {
   return {
     version: SESSION_FORMAT_VERSION,
     id: sid(id),
-    createdAt: 100,
+    createdAt,
     isSeeded: false,
     ...(cwd === null ? {} : { cwd }),
   }
@@ -51,6 +53,19 @@ function hit(id: string, index = 0): SessionSearchHit {
       surface: 'current',
       snippet: `match ${index}`,
     },
+  }
+}
+
+function messageItem(
+  id: string,
+  index = 0,
+  snippet = `match ${index}`,
+  type: 'user/message' | 'assistant/message' = 'user/message',
+) {
+  return {
+    sessionId: sid(id),
+    snippet,
+    match: { kind: 'message' as const, seq: SessionSeq(index), type },
   }
 }
 
@@ -96,9 +111,9 @@ function installSearchQuery(
 describe('session.search', () => {
   it('rejects search when the query service is absent', async () => {
     const ctx = await baseContext()
-    const list = new ApiSessionList(ctx)
+    const list = new ApiSessionList(ctx, [])
 
-    await expect(list.search('query', new AbortController().signal)).rejects.toMatchObject({
+    await expect(list.search(request('query'), new AbortController().signal)).rejects.toMatchObject({
       code: 'gateway/internal',
     })
     await ctx.fiber.dispose()
@@ -121,7 +136,7 @@ describe('session.search', () => {
       _request: SessionSearchRequest,
       _exec?: { signal?: AbortSignal },
     ) => Promise.resolve({
-      items: [
+      coverage: 'complete', unsupported_sessions: [], items: [
         {
           header: legacy,
           live: false,
@@ -159,7 +174,7 @@ describe('session.search', () => {
     expect(response).toEqual({
       ok: true,
       value: {
-        items: [{ sessionId: 'cold', snippet: 'the matching answer' }],
+        coverage: 'complete', unsupported_sessions: [], items: [messageItem('cold', 4, 'the matching answer', 'assistant/message')],
         hasMore: false,
       },
     })
@@ -180,6 +195,209 @@ describe('session.search', () => {
       limit: 20,
     })
     expect(exec.signal).toBe(signal)
+  })
+
+  it('matches a Chinese current title whose conversation messages do not contain the query', async () => {
+    const ctx = await baseContext()
+    await ctx.plugin(SessionTitleService, titleConfig)
+    const session = ctx.sessions.create(sid('title-only'), { meta: header('title-only') })
+    session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: '请分析上传的材料' }],
+      source: { kind: 'user' },
+    }), { surfaceOp: 'append' })
+    const title = ctx.sessionTitle.rename(session, '新咨询')
+    const searchSessions = vi.fn(() => Promise.resolve({
+      coverage: 'complete' as const, unsupported_sessions: [], items: [],
+    }))
+    installSearchQuery(ctx, searchSessions)
+
+    await expect(new ApiSessionList(ctx, []).search(request('新咨询'), new AbortController().signal)).resolves.toEqual({
+      coverage: 'complete',
+      unsupported_sessions: [],
+      items: [{
+        sessionId: sid('title-only'),
+        snippet: '新咨询',
+        match: { kind: 'title', projectionAsOfSeq: title.eventSeq },
+      }],
+      hasMore: false,
+    })
+    expect(searchSessions).toHaveBeenCalledOnce()
+    await ctx.fiber.dispose()
+  })
+
+  it('returns one title result when the same Session title and message both match', async () => {
+    const ctx = await baseContext()
+    await ctx.plugin(SessionTitleService, titleConfig)
+    const session = ctx.sessions.create(sid('title-and-message'), { meta: header('title-and-message') })
+    ctx.sessionTitle.rename(session, '合同审查')
+    installSearchQuery(ctx, () => Promise.resolve({
+      coverage: 'complete', unsupported_sessions: [], items: [hit('title-and-message', 7)],
+    }))
+
+    const result = await new ApiSessionList(ctx, []).search(request('合同审查'), new AbortController().signal)
+    expect(result.items).toHaveLength(1)
+    expect(result.items[0]).toMatchObject({
+      sessionId: sid('title-and-message'),
+      snippet: '合同审查',
+      match: { kind: 'title' },
+    })
+    await ctx.fiber.dispose()
+  })
+
+  it('searches only the latest title after an explicit rename', async () => {
+    const ctx = await baseContext()
+    await ctx.plugin(SessionTitleService, titleConfig)
+    const session = ctx.sessions.create(sid('renamed-title'), { meta: header('renamed-title') })
+    ctx.sessionTitle.rename(session, '旧标题')
+    const current = ctx.sessionTitle.rename(session, '当前标题')
+    installSearchQuery(ctx, () => Promise.resolve({ coverage: 'complete', unsupported_sessions: [], items: [] }))
+    const list = new ApiSessionList(ctx, [])
+
+    await expect(list.search(request('旧标题'), new AbortController().signal)).resolves.toMatchObject({ items: [] })
+    await expect(list.search(request('当前标题'), new AbortController().signal)).resolves.toMatchObject({
+      items: [{
+        sessionId: sid('renamed-title'),
+        snippet: '当前标题',
+        match: { kind: 'title', projectionAsOfSeq: current.eventSeq },
+      }],
+    })
+    await ctx.fiber.dispose()
+  })
+
+  it('applies one Session scope before title collection and on every message page', async () => {
+    const ctx = await baseContext()
+    await ctx.plugin(SessionTitleService, titleConfig)
+    for (let index = 0; index < 21; index++) {
+      const external = ctx.sessions.create(sid(`external-${index}`), {
+        meta: header(`external-${index}`, `/external-${index}`),
+      })
+      ctx.sessionTitle.rename(external, `范围查询 ${index}`)
+    }
+    const own = ctx.sessions.create(sid('own-message'), { meta: header('own-message', '/own') })
+    const sessionIds = [own.id]
+    const sessionFilters = [{ kind: 'id' as const, values: sessionIds }]
+    const searchSessions = vi.fn()
+      .mockResolvedValueOnce({
+        coverage: 'complete', unsupported_sessions: [], items: [], nextCursor: 'own-page',
+      })
+      .mockResolvedValueOnce({
+        coverage: 'complete', unsupported_sessions: [], items: [hit('own-message')],
+      })
+    installSearchQuery(ctx, searchSessions)
+    const filterSessions = vi.spyOn(ctx.sessionQuery, 'filterSessions')
+    const signal = new AbortController().signal
+
+    await expect(createSessionTestRemote(ctx, defaults).search({
+      query: '范围查询',
+      sessionIds,
+    }, signal)).resolves.toEqual({
+      ok: true,
+      value: {
+        coverage: 'complete',
+        unsupported_sessions: [],
+        items: [messageItem('own-message')],
+        hasMore: false,
+      },
+    })
+    expect(filterSessions).toHaveBeenCalledWith(sessionFilters, signal)
+    expect(searchSessions).toHaveBeenCalledTimes(2)
+    for (const call of searchSessions.mock.calls) {
+      expect(call[0]).toMatchObject({ sessionFilters })
+    }
+    await ctx.fiber.dispose()
+  })
+
+  it('treats an empty id scope as no visible Sessions', async () => {
+    const ctx = await baseContext()
+    await ctx.plugin(SessionTitleService, titleConfig)
+    const visible = ctx.sessions.create(sid('visible'), { meta: header('visible') })
+    ctx.sessionTitle.rename(visible, '范围查询')
+    const searchSessions = vi.fn(() => Promise.resolve({
+      coverage: 'complete', unsupported_sessions: [], items: [hit('visible')],
+    }))
+    installSearchQuery(ctx, searchSessions)
+    const sessionIds: SessionId[] = []
+
+    await expect(createSessionTestRemote(ctx, defaults).search({
+      query: '范围查询',
+      sessionIds,
+    }, new AbortController().signal)).resolves.toEqual({
+      ok: true,
+      value: {
+        coverage: 'complete', unsupported_sessions: [], items: [], hasMore: false,
+      },
+    })
+    expect(searchSessions).not.toHaveBeenCalled()
+    await ctx.fiber.dispose()
+  })
+
+  it('orders matching titles by recent prompt activity', async () => {
+    const ctx = await baseContext()
+    await ctx.plugin(SessionTitleService, titleConfig)
+    const list = new ApiSessionList(ctx, [])
+    const recentlyActive = ctx.sessions.create(sid('old-recently-active'), {
+      meta: header('old-recently-active', '/old', 100),
+    })
+    recentlyActive.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: 'unrelated recent prompt' }],
+      source: { kind: 'user' },
+    }), { surfaceOp: 'append' })
+    ctx.sessionTitle.rename(recentlyActive, '共同标题 旧会话')
+    const newlyCreated = ctx.sessions.create(sid('new-idle'), {
+      meta: header('new-idle', '/new', 1_000),
+    })
+    ctx.sessionTitle.rename(newlyCreated, '共同标题 新会话')
+    installSearchQuery(ctx, () => Promise.resolve({
+      coverage: 'complete', unsupported_sessions: [], items: [],
+    }))
+
+    const result = await list.search(
+      request('共同标题'),
+      new AbortController().signal,
+    )
+    expect(result.items.map(item => item.sessionId)).toEqual([
+      sid('old-recently-active'),
+      sid('new-idle'),
+    ])
+    await ctx.fiber.dispose()
+  })
+
+  it('continues message pages past title duplicates to preserve the unified result bound', async () => {
+    const ctx = await baseContext()
+    await ctx.plugin(SessionTitleService, titleConfig)
+    const titled = Array.from({ length: 20 }, (_, index) => {
+      const id = `title-${index}`
+      const session = ctx.sessions.create(sid(id), { meta: header(id) })
+      ctx.sessionTitle.rename(session, `统一检索 ${index}`)
+      return hit(id, index)
+    })
+    const additional = hit('message-only', 20)
+    ctx.sessions.create(additional.header.id, { meta: additional.header })
+    ctx.sessions.create(sid('unsupported-other'), { meta: header('unsupported-other') })
+    const searchSessions = vi.fn()
+      .mockResolvedValueOnce({
+        coverage: 'incomplete',
+        unsupported_sessions: [{ sessionId: sid('unsupported-other'), reason: 'SESSION_FORMAT_UNSUPPORTED' }],
+        items: titled,
+        nextCursor: 'page-2',
+      })
+      .mockResolvedValueOnce({
+        coverage: 'incomplete',
+        unsupported_sessions: [{ sessionId: sid('unsupported-other'), reason: 'SESSION_FORMAT_UNSUPPORTED' }],
+        items: [additional],
+      })
+    installSearchQuery(ctx, searchSessions)
+
+    const result = await new ApiSessionList(ctx, []).search(request('统一检索'), new AbortController().signal)
+    expect(result.items).toHaveLength(20)
+    expect(new Set(result.items.map(item => item.sessionId)).size).toBe(20)
+    expect(result.hasMore).toBe(true)
+    expect(result.coverage).toBe('incomplete')
+    expect(result.unsupported_sessions).toEqual([
+      { sessionId: sid('unsupported-other'), reason: 'SESSION_FORMAT_UNSUPPORTED' },
+    ])
+    expect(searchSessions).toHaveBeenCalledTimes(2)
+    await ctx.fiber.dispose()
   })
 
   it('rejects invalid wire queries before invoking the search provider', async () => {
@@ -210,7 +428,7 @@ describe('session.search', () => {
 
     expect(response).toEqual({
       ok: true,
-      value: { items: [], hasMore: false },
+      value: { coverage: 'complete', unsupported_sessions: [], items: [], hasMore: false },
     })
     expect(searchSessions).not.toHaveBeenCalled()
   })
@@ -227,7 +445,7 @@ describe('session.search', () => {
       return { ...base, bestMatch: { ...base.bestMatch, ...bestMatch } }
     }
     installSearchQuery(ctx, () => Promise.resolve({
-      items: [
+      coverage: 'complete', unsupported_sessions: [], items: [
         withBestMatch(0, { sessionId: sid('hidden') }),
         withBestMatch(1, { surface: 'shadowed' }),
         withBestMatch(2, { type: 'tool/result' }),
@@ -243,7 +461,7 @@ describe('session.search', () => {
     expect(response).toEqual({
       ok: true,
       value: {
-        items: [{ sessionId: 'visible', snippet: 'allowed snippet' }],
+        coverage: 'complete', unsupported_sessions: [], items: [messageItem('visible', 3, 'allowed snippet')],
         hasMore: false,
       },
     })
@@ -257,10 +475,10 @@ describe('session.search', () => {
     }
     const searchSessions = vi.fn()
       .mockResolvedValueOnce({
-        items: [hit('hidden-ranked-first'), ...items.slice(0, 19)],
+        coverage: 'complete', unsupported_sessions: [], items: [hit('hidden-ranked-first'), ...items.slice(0, 19)],
         nextCursor: 'page-2',
       })
-      .mockResolvedValueOnce({ items: items.slice(19) })
+      .mockResolvedValueOnce({ coverage: 'complete', unsupported_sessions: [], items: items.slice(19) })
     installSearchQuery(ctx, searchSessions)
     const response = await createSessionTestRemote(ctx, defaults).search(
       request('match'),
@@ -297,7 +515,7 @@ describe('session.search', () => {
         : Number.parseInt(providerRequest.cursor.slice('offset-'.length), 10)
       const end = Math.min(items.length, offset + limit)
       return Promise.resolve({
-        items: items.slice(offset, end),
+        coverage: 'complete', unsupported_sessions: [], items: items.slice(offset, end),
         ...end < items.length ? { nextCursor: `offset-${end}` } : {},
       })
     })
@@ -340,7 +558,7 @@ describe('session.search', () => {
       }
       expect(providerRequest.limit).toBe(10)
       return Promise.resolve({
-        items: [],
+        coverage: 'complete', unsupported_sessions: [], items: [],
         nextCursor: `page-${searchSessions.mock.calls.length}`,
       })
     })
@@ -386,7 +604,7 @@ describe('session.search', () => {
           expect(providerRequest).toMatchObject({ limit: 10 })
           expect(providerRequest).not.toHaveProperty('cursor')
           return Promise.resolve({
-            items: [oldOnly, shared],
+            coverage: 'complete', unsupported_sessions: [], items: [oldOnly, shared],
             nextCursor: 'old-cursor',
           })
         case 3:
@@ -398,13 +616,13 @@ describe('session.search', () => {
           expect(providerRequest).toMatchObject({ limit: 10 })
           expect(providerRequest).not.toHaveProperty('cursor')
           return Promise.resolve({
-            items: [freshFirst, shared],
+            coverage: 'complete', unsupported_sessions: [], items: [freshFirst, shared],
             nextCursor: 'old-cursor',
           })
         case 5:
           expect(providerRequest).toMatchObject({ limit: 10 })
           expect(providerRequest.cursor).toBe('old-cursor')
-          return Promise.resolve({ items: [freshLast, late] })
+          return Promise.resolve({ coverage: 'complete', unsupported_sessions: [], items: [freshLast, late] })
         default:
           return Promise.reject(new Error('unexpected provider call'))
       }
@@ -419,10 +637,10 @@ describe('session.search', () => {
     expect(response).toEqual({
       ok: true,
       value: {
-        items: [
-          { sessionId: 'fresh-first', snippet: 'match 2' },
-          { sessionId: 'shared', snippet: 'match 1' },
-          { sessionId: 'fresh-last', snippet: 'match 3' },
+        coverage: 'complete', unsupported_sessions: [], items: [
+          messageItem('fresh-first', 2),
+          messageItem('shared', 1),
+          messageItem('fresh-last', 3),
         ],
         hasMore: false,
       },
@@ -444,7 +662,7 @@ describe('session.search', () => {
       }
       if (providerRequest.cursor !== undefined) return Promise.reject(stale)
       return Promise.resolve({
-        items: [partial],
+        coverage: 'complete', unsupported_sessions: [], items: [partial],
         nextCursor: `cursor-${searchSessions.mock.calls.length}`,
       })
     })
@@ -472,7 +690,7 @@ describe('session.search', () => {
       'SESSION_QUERY_STALE_CURSOR',
     )
     const searchSessions = vi.fn()
-      .mockResolvedValueOnce({ items: [], nextCursor: 'stale-cursor' })
+      .mockResolvedValueOnce({ coverage: 'complete', unsupported_sessions: [], items: [], nextCursor: 'stale-cursor' })
       .mockImplementationOnce(() => {
         controller.abort()
         return Promise.reject(stale)
@@ -517,7 +735,7 @@ describe('session.search', () => {
     const ctx = await baseContext()
     ctx.sessions.create(sid('visible'), { meta: header('visible') })
     const searchSessions = vi.fn()
-      .mockResolvedValueOnce({ items: [], nextCursor: 'page-2' })
+      .mockResolvedValueOnce({ coverage: 'complete', unsupported_sessions: [], items: [], nextCursor: 'page-2' })
       .mockRejectedValueOnce(new SessionQueryError(
         'continuation limit is invalid',
         'SESSION_QUERY_INVALID_LIMIT',
@@ -593,7 +811,7 @@ describe('session.search', () => {
     const ctx = await baseContext()
     ctx.sessions.create(sid('visible'), { meta: header('visible') })
     const oversized = Array.from({ length: 21 }, (_, index) => hit(`oversized-${index}`))
-    const searchSessions = vi.fn(() => Promise.resolve({ items: oversized }))
+    const searchSessions = vi.fn(() => Promise.resolve({ coverage: 'complete', unsupported_sessions: [], items: oversized }))
     installSearchQuery(ctx, searchSessions)
 
     const response = await createSessionTestRemote(ctx, defaults).search(
@@ -618,7 +836,7 @@ describe('session.search', () => {
           'SESSION_QUERY_INVALID_LIMIT',
         ))
       }
-      return Promise.resolve({ items: oversized })
+      return Promise.resolve({ coverage: 'complete', unsupported_sessions: [], items: oversized })
     })
     installSearchQuery(ctx, searchSessions)
 
@@ -646,7 +864,7 @@ describe('session.search', () => {
         snippet: `${expected}${'y'.repeat(10_000)}`,
       },
     }
-    installSearchQuery(ctx, () => Promise.resolve({ items: [overlong] }))
+    installSearchQuery(ctx, () => Promise.resolve({ coverage: 'complete', unsupported_sessions: [], items: [overlong] }))
 
     const response = await createSessionTestRemote(ctx, defaults).search(
       request('bounded-snippet'),
@@ -656,7 +874,7 @@ describe('session.search', () => {
     expect(response).toEqual({
       ok: true,
       value: {
-        items: [{ sessionId: 'visible', snippet: expected }],
+        coverage: 'complete', unsupported_sessions: [], items: [messageItem('visible', 0, expected)],
         hasMore: false,
       },
     })
@@ -666,8 +884,8 @@ describe('session.search', () => {
     const ctx = await baseContext()
     ctx.sessions.create(sid('visible'), { meta: header('visible') })
     const searchSessions = vi.fn()
-      .mockResolvedValueOnce({ items: [], nextCursor: 'repeated' })
-      .mockResolvedValueOnce({ items: [], nextCursor: 'repeated' })
+      .mockResolvedValueOnce({ coverage: 'complete', unsupported_sessions: [], items: [], nextCursor: 'repeated' })
+      .mockResolvedValueOnce({ coverage: 'complete', unsupported_sessions: [], items: [], nextCursor: 'repeated' })
     installSearchQuery(ctx, searchSessions)
 
     const response = await createSessionTestRemote(ctx, defaults).search(
@@ -689,8 +907,8 @@ describe('session.search', () => {
       ctx.sessions.create(item.header.id, { meta: item.header })
     }
     const searchSessions = vi.fn()
-      .mockResolvedValueOnce({ items: items.slice(0, 20), nextCursor: 'repeated' })
-      .mockResolvedValueOnce({ items: items.slice(20), nextCursor: 'repeated' })
+      .mockResolvedValueOnce({ coverage: 'complete', unsupported_sessions: [], items: items.slice(0, 20), nextCursor: 'repeated' })
+      .mockResolvedValueOnce({ coverage: 'complete', unsupported_sessions: [], items: items.slice(20), nextCursor: 'repeated' })
     installSearchQuery(ctx, searchSessions)
 
     const response = await createSessionTestRemote(ctx, defaults).search(
@@ -715,9 +933,9 @@ describe('session.search', () => {
       ctx.sessions.create(item.header.id, { meta: item.header })
     }
     const searchSessions = vi.fn()
-      .mockResolvedValueOnce({ items: items.slice(0, 20), nextCursor: 'page-2' })
-      .mockResolvedValueOnce({ items: items.slice(0, 20), nextCursor: 'page-3' })
-      .mockResolvedValueOnce({ items: items.slice(20) })
+      .mockResolvedValueOnce({ coverage: 'complete', unsupported_sessions: [], items: items.slice(0, 20), nextCursor: 'page-2' })
+      .mockResolvedValueOnce({ coverage: 'complete', unsupported_sessions: [], items: items.slice(0, 20), nextCursor: 'page-3' })
+      .mockResolvedValueOnce({ coverage: 'complete', unsupported_sessions: [], items: items.slice(20) })
     installSearchQuery(ctx, searchSessions)
 
     const response = await createSessionTestRemote(ctx, defaults).search(
@@ -741,10 +959,10 @@ describe('session.search', () => {
     ctx.sessions.create(sid('visible'), { meta: header('visible') })
     const controller = new AbortController()
     const searchSessions = vi.fn()
-      .mockResolvedValueOnce({ items: [], nextCursor: 'page-2' })
+      .mockResolvedValueOnce({ coverage: 'complete', unsupported_sessions: [], items: [], nextCursor: 'page-2' })
       .mockImplementationOnce(() => {
         controller.abort()
-        return Promise.resolve({ items: [] })
+        return Promise.resolve({ coverage: 'complete', unsupported_sessions: [], items: [] })
       })
     installSearchQuery(ctx, searchSessions)
 
@@ -773,7 +991,7 @@ describe('session.search', () => {
       list: () => Promise.resolve(cold),
     }) as never)
     const searchSessions = vi.fn((_request: SessionSearchRequest) => Promise.resolve({
-      items: [hit('cold-32750')],
+      coverage: 'complete', unsupported_sessions: [], items: [hit('cold-32750')],
     }))
     installSearchQuery(ctx, searchSessions)
 
@@ -785,7 +1003,7 @@ describe('session.search', () => {
     expect(response).toEqual({
       ok: true,
       value: {
-        items: [{ sessionId: 'cold-32750', snippet: 'match 0' }],
+        coverage: 'complete', unsupported_sessions: [], items: [messageItem('cold-32750')],
         hasMore: false,
       },
     })
@@ -837,7 +1055,7 @@ describe('session.search', () => {
       stat,
       inspect,
     }) as never)
-    const searchSessions = vi.fn(() => Promise.resolve({ items: [] }))
+    const searchSessions = vi.fn(() => Promise.resolve({ coverage: 'complete', unsupported_sessions: [], items: [] }))
     installSearchQuery(ctx, searchSessions)
 
     const response = await createSessionTestRemote(ctx, defaults).search(
@@ -846,7 +1064,7 @@ describe('session.search', () => {
     )
     expect(response).toMatchObject({
       ok: true,
-      value: { items: [], hasMore: false },
+      value: { coverage: 'complete', unsupported_sessions: [], items: [], hasMore: false },
     })
     expect(stat).not.toHaveBeenCalled()
     expect(inspect).not.toHaveBeenCalled()
@@ -894,5 +1112,40 @@ describe('session.search', () => {
     if (failed.ok) throw new Error('unreachable')
     expect(failed.error.code).toBe('gateway/internal')
     expect(failed.error.message).toContain('database unavailable')
+  })
+})
+
+describe('search coverage contract', () => {
+  it('retains incomplete status while restricting unsupported ids to list-visible sessions', async () => {
+    const ctx = await baseContext()
+    ctx.sessions.create(sid('visible'), { meta: header('visible') })
+    installSearchQuery(ctx, async () => ({
+      items: [], coverage: 'incomplete', unsupported_sessions: [
+        { sessionId: sid('visible'), reason: 'SESSION_FORMAT_UNSUPPORTED' },
+        { sessionId: sid('hidden'), reason: 'SESSION_FORMAT_UNSUPPORTED' },
+      ],
+    }))
+    try {
+      await expect(new ApiSessionList(ctx, []).search(request('needle'), new AbortController().signal)).resolves.toEqual({
+        items: [], hasMore: false, coverage: 'incomplete', unsupported_sessions: [
+          { sessionId: sid('visible'), reason: 'SESSION_FORMAT_UNSUPPORTED' },
+        ],
+      })
+    } finally { await ctx.fiber.dispose() }
+  })
+
+  it('does not invent complete coverage when all unsupported ids are outside the visible list', async () => {
+    const ctx = await baseContext()
+    ctx.sessions.create(sid('visible'), { meta: header('visible') })
+    installSearchQuery(ctx, async () => ({
+      items: [], coverage: 'incomplete', unsupported_sessions: [
+        { sessionId: sid('hidden'), reason: 'SESSION_FORMAT_UNSUPPORTED' },
+      ],
+    }))
+    try {
+      await expect(new ApiSessionList(ctx, []).search(request('needle'), new AbortController().signal)).resolves.toEqual({
+        items: [], hasMore: false, coverage: 'incomplete', unsupported_sessions: [],
+      })
+    } finally { await ctx.fiber.dispose() }
   })
 })

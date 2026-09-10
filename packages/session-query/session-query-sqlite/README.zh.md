@@ -60,7 +60,7 @@ kind: "package-reference"
 
 排序是确定性的：实际 FTS5 高亮匹配 span 更多的在前，然后文档更短的在前，事件时间、会话 id 与 seq 打破平局。结果携带按 `snippetChars` 个 Unicode 码点截断的纯文本摘录，没有提供方专用数值分数。分页通过不透明 `SessionSearchCursor` 延续，游标绑定到规范化后的确切请求；相关语料库变化时游标变为陈旧（`SESSION_QUERY_STALE_CURSOR`），会话内游标可在不相关会话变化后延续，跨会话游标则不能。
 
-`unicode61` tokenizer 匹配 token 与短语，而非任意子字符串：`AI` 不匹配 token `BRAID`。需要执行字面、空白灵活的字符串子串扫描时，使用带 `text` 子句的 `ctx.sessionQuery.filterEvents()`。
+在写入索引和执行 MATCH 前，汉字会被对称地分为相邻 token，因此“刑事”可命中“分析这个刑事案件”中的对应片段。其他文字仍遵循 `unicode61` token 语义：`AI` 不匹配 token `BRAID`。其他字面、空白灵活的字符串子串扫描使用带 `text` 子句的 `ctx.sessionQuery.filterEvents()`。
 
 ### 何时推迟或关闭搜索
 
@@ -69,6 +69,8 @@ kind: "package-reference"
 ### 失败与恢复
 
 带类型的 `SessionQueryError` 失败携带稳定代码：搜索配置为关闭时 `SESSION_QUERY_SEARCH_DISABLED`；索引无法打开或对账时 `SESSION_QUERY_INDEX_FAILED`；搜索目标不存在时 `SESSION_QUERY_SESSION_NOT_FOUND`；语料库在分页之间变化时 `SESSION_QUERY_STALE_CURSOR`——请重试完整的搜索调用；游标不属于该请求时 `SESSION_QUERY_INVALID_CURSOR`。取消在同步 SQLite 调用之间被尊重；已在 JavaScript 线程上执行的语句无法被中断。
+
+跨会话搜索在检查可枚举的完整日志时遇到 `SessionFormatUnsupportedError`，返回 `coverage: incomplete` 及 `unsupported_sessions`。不支持的日志保留在会话存储与列表中；查询只移除失效的派生索引行，不启用继续执行。其他持久化故障仍使搜索失败。`searchEvents` 指向不支持的会话时以 `SESSION_QUERY_FORMAT_UNSUPPORTED` 拒绝；可读取目标的覆盖完整性不受无关会话影响。进程重启后的首次观察先验证持久化日志，再复用索引行。
 
 -----
 
@@ -143,7 +145,7 @@ kind: "package-reference"
 
 - **无调用方授权**——这是上下文范围内的可信服务；模型工具或 UI 必须强制执行自己的访问策略。
 - **同步查询执行**——`DatabaseSync` 在 MATCH 执行期间会阻塞 JavaScript 线程，且无法中断已运行的语句。
-- **Token 召回，而非任意子字符串**——`unicode61` tokenizer 不会匹配更大 token 中的子字符串；对字面扫描使用 `filterEvents()`。
+- **汉字短语，其他文字仍按 token 召回**——索引把汉字按相邻 token 保存，因此“刑事”等短语可以命中更长中文文本中的对应片段。其他文字仍遵循 `unicode61` token 语义，不提供任意子字符串匹配；字面扫描使用 `filterEvents()`。
 - **单一所有者的派生索引**——每个索引路径必须仅归一个进程中的一个服务所有；不支持外部写入者与多进程共享。
 
 <a id="dev-note"></a>
@@ -156,6 +158,6 @@ kind: "package-reference"
 
 #### 未来：其他 tokenizer 与搜索提供方
 
-`unicode61` tokenizer 的选择以索引体积与双字符 token 支持换取子字符串召回；trigram 备选方案曾被测量并否决。切换 tokenizer 或增加另一个搜索后端会改变索引召回，并需要各自的对账与世代方案。
+`unicode61` tokenizer 加对称汉字分词，在保持较小 token 索引的同时支持一字和二字查询；trigram 备选方案无法覆盖更短查询，因此曾被测量并否决。切换 tokenizer 或增加另一个搜索后端会改变索引召回，并需要各自的对账与世代方案。
 
 </details>

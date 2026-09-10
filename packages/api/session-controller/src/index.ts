@@ -69,6 +69,8 @@ declare module '@deepseek-ai/cordis' {
 
 /** Session Controller deployment policy. */
 export interface Config {
+  /** Client-visible projection keys that every cold Session list row must provide. */
+  readonly requiredColdListProjectionKeys?: string[]
   /** Override platform desktop-opener detection. */
   readonly nativeOpen?: boolean
 }
@@ -99,6 +101,7 @@ export class SessionController extends TypertRemoteService {
   ]
 
   static Config: z<Config> = z.object({
+    requiredColdListProjectionKeys: z.array(z.string().min(1)).default([]),
     nativeOpen: z.boolean(),
   })
 
@@ -114,7 +117,7 @@ export class SessionController extends TypertRemoteService {
 
   /**
    * @param ctx - Host context containing the Session capability assembly.
-   * @param config - native-opener deployment policy.
+   * @param config - native-opener policy and declared cold-list projection keys.
    * @param internals - host integrations replaceable by direct unit tests.
    */
   constructor(ctx: Context, config: Config, internals: SessionControllerInternals = {}) {
@@ -134,7 +137,7 @@ export class SessionController extends TypertRemoteService {
       await Promise.allSettled([...this.promotions])
     }, 'session-controller.promotions')
     this.history = new SessionHistoryController(ctx, (observation) => { this.promote(observation) })
-    this.listState = new ApiSessionList(ctx)
+    this.listState = new ApiSessionList(ctx, config.requiredColdListProjectionKeys ?? [])
     this.openPath = internals.openPath ?? openNativePath
     this.revealPath = internals.revealPath ?? revealNativePath
     this.canOpenPath = internals.canOpenPath
@@ -225,14 +228,14 @@ export class SessionController extends TypertRemoteService {
   }
 
   /**
-   * Search visible Session content without resuming an Agent.
-   * @param request - literal message-content query.
+   * Search visible Session titles and message content without resuming an Agent.
+   * @param request - literal title-or-message query.
    * @param signal - cancellation for list and search reads.
    * @returns authorized bounded Session search results.
    */
   @Remote('search')
   search(request: SessionSearchRequest, signal: AbortSignal): Promise<SessionSearchValue> {
-    return this.listState.search(request.query, signal)
+    return this.listState.search(request, signal)
   }
 
   /**

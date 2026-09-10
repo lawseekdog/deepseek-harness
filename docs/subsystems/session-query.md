@@ -186,8 +186,24 @@ interface SessionEventSearchRequest {
 ```
 
 ```ts type-equiv
+/** An intact Session the current runtime cannot interpret; no raw path is exposed. */
+interface UnsupportedSearchSession {
+  sessionId: SessionId
+  reason: 'SESSION_FORMAT_UNSUPPORTED'
+}
+```
+
+```ts type-equiv
+/** Search completeness over the observed corpus, independent of match count. */
+interface SessionSearchCoverage {
+  coverage: 'complete' | 'incomplete'
+  unsupported_sessions: readonly UnsupportedSearchSession[]
+}
+```
+
+```ts type-equiv
 /** One cursor-paginated result page. */
-interface SessionSearchPage<T> {
+interface SessionSearchPage<T> extends SessionSearchCoverage {
   /** Results for this page in contract-defined order. */
   items: readonly T[]
   /** Opaque continuation cursor, absent on the final page. */
@@ -360,6 +376,7 @@ type SessionQueryErrorCode =
   | 'SESSION_QUERY_SESSION_NOT_FOUND'
   | 'SESSION_QUERY_STALE_CURSOR'
   | 'SESSION_QUERY_SOURCE_CONFLICT'
+  | 'SESSION_QUERY_FORMAT_UNSUPPORTED'
 ```
 
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->

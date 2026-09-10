@@ -23,13 +23,14 @@ class TestSessionQueryEngine extends SessionQueryEngine {
   override searchSessions(
     ..._args: Parameters<SessionQueryEngine['searchSessions']>
   ): ReturnType<SessionQueryEngine['searchSessions']> {
-    return Promise.resolve({ items: [] })
+    return Promise.resolve({ coverage: 'complete', unsupported_sessions: [], items: [] })
   }
 
   override searchEvents(
     ...args: Parameters<SessionQueryEngine['searchEvents']>
   ): ReturnType<SessionQueryEngine['searchEvents']> {
     return this.readSurface(args[0].sessionId).then(surface => ({
+      coverage: 'complete', unsupported_sessions: [],
       session: surface.session,
       items: [],
     }))

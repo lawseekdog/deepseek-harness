@@ -117,7 +117,13 @@ describe('search', () => {
     await feedList(b, [{ id: 's1' }])
     const before = b.svc.list.getSnapshot()
     b.api.onSearch = () => Promise.resolve(ok({
-      items: [{ sessionId: sid('s1'), snippet: 'matching excerpt' }],
+      coverage: 'complete',
+      unsupported_sessions: [],
+      items: [{
+        sessionId: sid('s1'),
+        snippet: 'matching excerpt',
+        match: { kind: 'message' as const, seq: SessionSeq(3), type: 'assistant/message' as const },
+      }],
       hasMore: false,
     }))
     const signal = new AbortController().signal
@@ -125,7 +131,13 @@ describe('search', () => {
     await expect(b.svc.search('needle', signal)).resolves.toEqual({
       ok: true,
       value: {
-        items: [{ sessionId: 's1', snippet: 'matching excerpt' }],
+        coverage: 'complete',
+        unsupported_sessions: [],
+        items: [{
+          sessionId: 's1',
+          snippet: 'matching excerpt',
+          match: { kind: 'message', seq: 3, type: 'assistant/message' },
+        }],
         hasMore: false,
       },
     })

@@ -1,9 +1,10 @@
+import type { SessionSearchValue } from '../src/types.ts'
 // Test-local programmable Remote fake (NOT the fixture: fixture is a demo
 // data source on a real clock; behavior tests need per-case responses and
 // deferred-controlled timing). Session streams are hand pumps: pushFollow/pushControl.
 import type {
   MessageId,
-  SessionId, SessionSearchItem,
+  SessionId,
   SubagentCatalog, SubagentInterruptReceipt, SubagentPromptReceipt,
   WorkspaceId, WorkspaceView,
 } from '@deepseek-ai/dsh-api-remotes/client'
@@ -123,8 +124,8 @@ export class FakeApiClient {
 
   // Programmable slots (defaults answer OK-empty); reassign per case.
   onList: (payload: unknown) => Promise<RemoteResult<{ items: never[] }>> = () => Promise.resolve(ok({ items: [] }))
-  onSearch: (payload: unknown) => Promise<RemoteResult<{ items: SessionSearchItem[]; hasMore: boolean }>> =
-    () => Promise.resolve(ok({ items: [], hasMore: false }))
+  onSearch: (payload: unknown) => Promise<RemoteResult<SessionSearchValue>> =
+    () => Promise.resolve(ok({ items: [], hasMore: false, coverage: 'complete', unsupported_sessions: [] }))
   onCreate: (payload: unknown) => Promise<RemoteResult<{ sessionId: SessionId }>> = () => Promise.resolve(ok({ sessionId: 'fk-new' as SessionId }))
   onSelectModel: (payload: SessionSelectModelRequest) => Promise<RemoteResult<SessionSelectModelValue>> =
     payload => Promise.resolve(ok({

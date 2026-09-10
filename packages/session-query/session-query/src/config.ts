@@ -44,6 +44,7 @@ export type SessionQueryErrorCode =
   | 'SESSION_QUERY_SESSION_NOT_FOUND'
   | 'SESSION_QUERY_STALE_CURSOR'
   | 'SESSION_QUERY_SOURCE_CONFLICT'
+  | 'SESSION_QUERY_FORMAT_UNSUPPORTED'
 
 /** Typed session-query failure whose `code` is one closed taxonomy member. */
 export class SessionQueryError extends HarnessError {

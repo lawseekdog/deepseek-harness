@@ -725,8 +725,8 @@ inspect( sessionId: SessionId, signal?: AbortSignal, ): Promise<SessionInspectio
 @Remote('list') async list(_request: SessionListRequest, signal: AbortSignal): Promise<SessionListValue>
 
 /**
- * Search visible Session content without resuming an Agent.
- * @param request - literal message-content query.
+ * Search visible Session titles and message content without resuming an Agent.
+ * @param request - literal title-or-message query.
  * @param signal - cancellation for list and search reads.
  * @returns authorized bounded Session search results.
  */

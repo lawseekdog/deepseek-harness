@@ -64,6 +64,8 @@ The inherited knobs are set through the mounted backend's config:
 
 Failures are typed with a stable `SessionQueryError.code`. The ones you will meet: `SESSION_QUERY_SESSION_NOT_FOUND` when an id is absent; `SESSION_QUERY_SOURCE_CONFLICT` when live and persisted observations of one session disagree on immutable headers; `SESSION_QUERY_PERSISTENCE_FAILED` when mounted persistence is unreadable; `SESSION_QUERY_CORRUPT_SESSION` when a durable record fails Session validation; and `SESSION_QUERY_INVALID_SURFACE` when a loaded log breaks the surface contract. Reads targeting a known live session never consult persistence, so a failing backend cannot make current in-memory history unreadable.
 
+Search pages require `coverage` (`complete` or `incomplete`) and `unsupported_sessions`. An incomplete page reports intact Sessions that the provider could enumerate but could not interpret; match count does not imply completeness. Consumers must preserve the coverage status when filtering results for authorization.
+
 -----
 
 <a id="understand-the-implementation"></a>

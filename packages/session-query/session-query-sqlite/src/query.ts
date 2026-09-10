@@ -14,11 +14,13 @@ import type {
   SessionSearchCursor,
   SessionSearchRequest,
 } from '@deepseek-ai/dsh-session-query'
+import { FTS_HAN_BOUNDARY } from './schema.ts'
 
 /** Collision-free marker inserted before an FTS5 match by `highlight()`. */
 export const FTS_HIGHLIGHT_START = '\uFDD0'
 /** Collision-free marker inserted after an FTS5 match by `highlight()`. */
 export const FTS_HIGHLIGHT_END = '\uFDD1'
+const HAN_CHARACTER = /\p{Script=Han}/gu
 
 /** Largest page size whose internal lookahead remains an exact SQLite integer binding. */
 export const SQLITE_MAX_PAGE_LIMIT = Number.MAX_SAFE_INTEGER - 1
@@ -234,6 +236,20 @@ export function sanitizeFtsText(text: string): string {
     .replaceAll('\0', '\uFFFD')
     .replaceAll(FTS_HIGHLIGHT_START, '\uFFFD')
     .replaceAll(FTS_HIGHLIGHT_END, '\uFFFD')
+    .replaceAll(FTS_HAN_BOUNDARY, '\uFFFD')
+}
+
+/**
+ * Prepare literal text for symmetric document and query tokenization.
+ *
+ * SQLite's `unicode61` tokenizer groups consecutive Han characters into one
+ * token. Separating each Han code point preserves phrase order while allowing
+ * a short query such as `刑事` to match inside `分析这个刑事案件`.
+ */
+export function prepareFtsText(text: string): string {
+  return sanitizeFtsText(text)
+    .replace(HAN_CHARACTER, `${FTS_HAN_BOUNDARY}$&${FTS_HAN_BOUNDARY}`)
+    .replaceAll(`${FTS_HAN_BOUNDARY}${FTS_HAN_BOUNDARY}`, FTS_HAN_BOUNDARY)
 }
 
 /**
@@ -302,6 +318,7 @@ function normalizeMarkedText(markedText: string): { text: string; matchStart: nu
       continue
     }
     if (character === FTS_HIGHLIGHT_END) continue
+    if (character === FTS_HAN_BOUNDARY) continue
     if (/\s/u.test(character)) {
       if (characters.length > 0 && characters.at(-1) !== ' ') characters.push(' ')
     } else {

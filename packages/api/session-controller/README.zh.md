@@ -35,6 +35,10 @@ Client adapter 提供 `SessionEventStream`，即绑定到一个普通 Session �
 Session 对象还承载本地提交回显：`session.beginSubmission` 在调用方序列化与 prompt 之前，同步把一条回显写入 `SessionSnapshot.pendingSubmissions`，会话 UI 因此能在点击提交的当帧显示消息。回显按顺序存放图片预览与持久文件引用。Session 根据当前运行状态与请求的投递模式推导其 `transcript`、`queued` 或 `steering` 位置，并在序列化期间保留该位置。prompt 的 `requestId` 是关联标识：Host 把它回显为 durable user source 的 `rpcId`，queue occurrence 也把它投影为 `SessionQueuedItem.rpcId`。回显在观察到其 durable event 或 queue occurrence 后延迟一个动画帧退休，带标识的 prompt 失败或被放弃时立即退休，销毁时按 failed 退休。每次退休恰好触发一次 `onRetire`；observed 退休还会携带有序的持久附件引用，让 composer 释放成功卡片并保留失败草稿。回显只存在于 Client 内存；刷新与重连只从 durable event 重建会话。
 
 
+会话搜索合并当前官方标题投影与当前 surface 的用户、助手消息命中。标题命中按最近活动顺序排在消息命中之前；同一会话同时命中两类来源时只返回一次。每个结果项标识确切标题投影切点或消息事件。重命名后，后续搜索不再匹配原标题。结果保持固定上限；消息分页遇到标题重复项时，控制器会继续读取后续页。
+
+搜索除 `items` 与 `hasMore` 外，还必须返回 `coverage` 和 `unsupported_sessions`。控制器按列表可见性过滤不支持的会话 ID；即使全部 ID 都不予返回，仍保留不完整状态。采用用户或租户鉴权的部署必须独立授权每个返回 ID；存在工作目录不代表具备租户权限。客户端原样传递覆盖状态。标题匹配不会准备、迁移或继续执行不支持的会话。
+
 <a id="session-media-references"></a>
 ## 会话媒体引用
 
@@ -48,6 +52,7 @@ Session 对象还承载本地提交回显：`session.beginSubmission` 在调用�
 | 字段 | 默认值 | 含义 |
 |---|---:|---|
 | `nativeOpen` | 平台探测 | 是否能把 Session 工作区路径交给原生桌面打开器 |
+| `requiredColdListProjectionKeys` | `[]` | 每条冷 Session 列表行都必须提供的客户端可见投影 key |
 
 生成的[配置目录](../../../docs/config-catalog.zh.md#deepseek-aidsh-api-session-controller)是所有受支持字段及其 JSDoc 的完整来源。
 

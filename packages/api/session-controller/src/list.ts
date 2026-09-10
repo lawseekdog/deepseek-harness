@@ -7,7 +7,11 @@ import { SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type { Session, SessionEvent, SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-projection'
 import type {} from '@deepseek-ai/dsh-session-projection-cache'
-import { SessionQueryError, type SessionSearchCursor } from '@deepseek-ai/dsh-session-query'
+import {
+  SessionQueryError,
+  type SessionResultFilter,
+  type SessionSearchCursor,
+} from '@deepseek-ai/dsh-session-query'
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import { z } from 'zod'
 import {
@@ -16,12 +20,17 @@ import {
 } from './types.ts'
 import type {
   SessionListMetadata, SessionProjectionHints, SessionProjectionValues, SessionSearchItem,
-  SessionSearchValue, SessionSummary,
+  SessionSearchRequest, SessionSearchValue, SessionSummary,
 } from './types.ts'
 
+const COLD_SUMMARY_BATCH_SIZE = 16
 const SEARCH_PROVIDER_CALL_LIMIT = 100
 const SESSION_SEARCH_QUERY_MAX_CHARS = 500
-const MESSAGE_TYPES = new Set(['user/message', 'assistant/message'])
+type MessageSearchType = Extract<SessionSearchItem['match'], { kind: 'message' }>['type']
+const MESSAGE_TYPES = new Set<MessageSearchType>([
+  'user/message',
+  'assistant/message',
+])
 
 const sessionListMetadataSchema: z.ZodType<SessionListMetadata> = z.object({
   blank: z.boolean(),
@@ -73,10 +82,27 @@ export function truncateUnicodeCodePoints(value: string, maximum: number): strin
   return value
 }
 
-/** Owns list projection registration, bounded cold summaries, and authorized search. */
+/**
+ * Owns list projection registration, cold summaries, and authorized search.
+ *
+ * A cold row is served from the projection cache unless its block lacks a declared
+ * required key; that case refolds the Session exactly once and writes the result back
+ * to the official cache before the row is served.
+ */
 export class ApiSessionList {
-  /** @param ctx - Host context carrying Session, query, persistence, and projection services. */
-  constructor(private readonly ctx: Context) {
+  private readonly requiredColdListProjectionKeys: readonly string[]
+
+  /**
+   * @param ctx - Host context carrying Session, query, persistence, and projection services.
+   * @param requiredColdListProjectionKeys - projection keys whose absence requires an exact cold refold.
+   */
+  constructor(
+    private readonly ctx: Context,
+    requiredColdListProjectionKeys: readonly string[],
+  ) {
+    this.requiredColdListProjectionKeys = validateRequiredColdListProjectionKeys(
+      requiredColdListProjectionKeys,
+    )
     ctx.sessionProjections.register<'sessionListMetadata', SessionListMetadata>({
       key: 'sessionListMetadata',
       stateSchema: sessionListMetadataSchema,
@@ -138,33 +164,95 @@ export class ApiSessionList {
       if (record.header.cwd === undefined) continue
       cold.push(record.header)
     }
-    for (const header of cold) items.push(this.summarizeCold(header))
+    for (let offset = 0; offset < cold.length; offset += COLD_SUMMARY_BATCH_SIZE) {
+      const settled = await Promise.allSettled(cold.slice(offset, offset + COLD_SUMMARY_BATCH_SIZE)
+        .map(header => this.summarizeCold(header, signal)))
+      for (const result of settled) {
+        if (result.status === 'rejected') throw result.reason
+        items.push(result.value)
+      }
+    }
     items.sort((left, right) => right.updatedAt - left.updatedAt)
     return items
   }
 
-  private summarizeCold(header: SessionHeader): SessionSummary {
-    const projections = this.projectionsFor(header, undefined)
+  /**
+   * Summarize one cold Session, refolding it exactly when its cached column lacks a declared key.
+   * @param header - persisted Session header.
+   * @param signal - optional cancellation for the refold read.
+   * @returns the row served for this cold Session.
+   */
+  private async summarizeCold(
+    header: SessionHeader,
+    signal: AbortSignal | undefined,
+  ): Promise<SessionSummary> {
+    const cached = this.projectionsFor(header, undefined)
+    const projections = this.hasRequiredColdListProjections(cached)
+      ? cached
+      : await this.readRequiredColdListProjections(header, signal)
+    const raced = this.ctx.sessions.get(header.id)
+    if (raced !== undefined) return this.summaryFor(raced)
     const metadata = projections?.values.sessionListMetadata
     return {
       sessionId: header.id,
       updatedAt: updatedAt(header, metadata),
       running: false,
-      // A large, metadata-less, or inaccessible cache miss remains unknown and visible.
+      // A metadata-less or inaccessible cache miss remains unknown and visible.
       blank: metadata?.blank ?? false,
       ...listFields(header),
       ...(projections === undefined ? {} : { projections }),
     }
   }
 
+  private hasRequiredColdListProjections(
+    projections: SessionProjectionHints | undefined,
+  ): boolean {
+    return this.requiredColdListProjectionKeys.every(key =>
+      projections !== undefined && Object.hasOwn(projections.values, key))
+  }
+
+  private async readRequiredColdListProjections(
+    header: SessionHeader,
+    signal: AbortSignal | undefined,
+  ): Promise<SessionProjectionHints> {
+    using observation = await this.ctx.sessionQuery.observeSession(header.id, {
+      ...(signal === undefined ? {} : { signal }),
+      projectionMode: 'all',
+    })
+    signal?.throwIfAborted()
+    const observed = observation.source === 'prepared'
+      ? this.ctx.get('sessionProjectionCache')?.coldSnapshot(
+        observation.header,
+        observation.inheritedEventCount,
+        observation.events,
+      ) ?? observation.projections
+      : observation.projections
+    signal?.throwIfAborted()
+    const missing = this.requiredColdListProjectionKeys.filter(key =>
+      observed === undefined || !Object.hasOwn(observed.values, key))
+    if (observed === undefined || missing.length > 0) {
+      throw new Error(
+        `api-session.list: exact projection observation for ${JSON.stringify(header.id)} `
+        + `did not provide required keys ${JSON.stringify(missing)}`,
+      )
+    }
+    return {
+      asOfSeq: observed.asOfSeq,
+      values: observed.values as SessionProjectionValues,
+    }
+  }
+
   /**
-   * Search current visible message content without activating any matching Session.
-   * @param query - literal message-content query.
+   * Search current visible titles and message content without activating any matching Session.
+   * @param request - literal title-or-message query and authorized Session predicates.
    * @param signal - cancellation for list and search reads.
    * @returns authorized bounded Session search results.
    */
-  async search(query: string, signal: AbortSignal): Promise<SessionSearchValue> {
-    const normalizedQuery = normalizeSearchQuery(query)
+  async search(request: SessionSearchRequest, signal: AbortSignal): Promise<SessionSearchValue> {
+    const normalizedQuery = normalizeSearchQuery(request.query)
+    const sessionFilters: readonly SessionResultFilter[] = request.sessionIds === undefined
+      ? []
+      : [{ kind: 'id', values: request.sessionIds }]
     signal.throwIfAborted()
     const provider = this.ctx.get('sessionQuery')
     if (provider === undefined) {
@@ -175,19 +263,41 @@ export class ApiSessionList {
       )
     }
     try {
-      const visible = await provider.listSessions(signal)
+      const visible = await provider.filterSessions(sessionFilters, signal)
       signal.throwIfAborted()
-      const visibleIds = new Set(visible
-        .filter(record => record.header.cwd !== undefined)
-        .map(record => record.header.id))
-      if (visibleIds.size === 0) return { items: [], hasMore: false }
-      const authorized: SessionSearchItem[] = []
-      const acceptedIds = new Set<SessionId>()
+      const visibleHeaders = visible
+        .map(record => record.header)
+        .filter(header => header.cwd !== undefined)
+      const visibleIds = new Set(visibleHeaders.map(header => header.id))
+      if (visibleIds.size === 0) return { items: [], hasMore: false, coverage: 'complete', unsupported_sessions: [] }
+      const titleCandidates: { readonly item: SessionSearchItem; readonly updatedAt: number }[] = []
+      for (const header of visibleHeaders) {
+        const projections = this.projectionsFor(header, this.ctx.sessions.get(header.id))
+        if (projections === undefined) continue
+        const title = projections.values.title
+        if (typeof title !== 'string' || !matchesLiteralPhrase(title, normalizedQuery)) continue
+        titleCandidates.push({
+          item: {
+            sessionId: header.id,
+            snippet: truncateUnicodeCodePoints(title, SESSION_SEARCH_SNIPPET_MAX_CODE_POINTS),
+            match: { kind: 'title', projectionAsOfSeq: projections.asOfSeq },
+          },
+          updatedAt: updatedAt(header, projections.values.sessionListMetadata),
+        })
+      }
+      titleCandidates.sort((left, right) => right.updatedAt - left.updatedAt)
+      const titleMatches = titleCandidates
+        .slice(0, SESSION_SEARCH_RESULT_LIMIT + 1)
+        .map(candidate => candidate.item)
+      const authorized = [...titleMatches]
+      const acceptedIds = new Set<SessionId>(titleMatches.map(item => item.sessionId))
+      let coverage: SessionSearchValue['coverage'] = 'complete'
+      let unsupported: SessionSearchValue['unsupported_sessions'] = []
       const seenCursors = new Set<SessionSearchCursor>()
       let cursor: SessionSearchCursor | undefined
       let providerCalls = 0
       let pageLimit = SESSION_SEARCH_RESULT_LIMIT
-      while (authorized.length <= SESSION_SEARCH_RESULT_LIMIT) {
+      while (providerCalls === 0 || authorized.length <= SESSION_SEARCH_RESULT_LIMIT) {
         signal.throwIfAborted()
         if (providerCalls >= SEARCH_PROVIDER_CALL_LIMIT) {
           throw new Error(`session search provider exceeded the ${SEARCH_PROVIDER_CALL_LIMIT}-call work budget`)
@@ -199,6 +309,7 @@ export class ApiSessionList {
         try {
           page = await provider.searchSessions({
             query: normalizedQuery,
+            ...(request.sessionIds === undefined ? {} : { sessionFilters }),
             eventFilters: [
               { kind: 'type', values: ['user/message', 'assistant/message'] },
               { kind: 'surface', values: ['current'] },
@@ -220,13 +331,17 @@ export class ApiSessionList {
             && error instanceof SessionQueryError
             && error.code === 'SESSION_QUERY_STALE_CURSOR') {
             authorized.length = 0
+            authorized.push(...titleMatches)
             acceptedIds.clear()
+            for (const item of titleMatches) acceptedIds.add(item.sessionId)
             seenCursors.clear()
             cursor = undefined
             continue
           }
           throw error
         }
+        coverage = page.coverage
+        unsupported = page.unsupported_sessions.filter(item => visibleIds.has(item.sessionId))
         if (page.items.length > requestedLimit) {
           throw new Error(`session search provider returned ${String(page.items.length)} items; maximum is ${String(requestedLimit)}`)
         }
@@ -235,12 +350,13 @@ export class ApiSessionList {
           if (!visibleIds.has(hit.header.id)
             || hit.bestMatch.sessionId !== hit.header.id
             || hit.bestMatch.surface !== 'current'
-            || !MESSAGE_TYPES.has(hit.bestMatch.type)
+            || !isMessageType(hit.bestMatch.type)
             || acceptedIds.has(hit.header.id)) continue
           acceptedIds.add(hit.header.id)
           authorized.push({
             sessionId: hit.header.id,
             snippet: truncateUnicodeCodePoints(hit.bestMatch.snippet, SESSION_SEARCH_SNIPPET_MAX_CODE_POINTS),
+            match: { kind: 'message', seq: hit.bestMatch.seq, type: hit.bestMatch.type },
           })
         }
         if (page.nextCursor !== undefined) {
@@ -255,6 +371,8 @@ export class ApiSessionList {
       return {
         items: authorized.slice(0, SESSION_SEARCH_RESULT_LIMIT),
         hasMore: authorized.length > SESSION_SEARCH_RESULT_LIMIT,
+        coverage,
+        unsupported_sessions: unsupported,
       }
     } catch (error: unknown) {
       signal.throwIfAborted()
@@ -294,6 +412,20 @@ export class ApiSessionList {
   }
 }
 
+function validateRequiredColdListProjectionKeys(keys: readonly string[]): readonly string[] {
+  const unique = new Set<string>()
+  for (const key of keys) {
+    if (key.length === 0) {
+      throw new Error('api-session.list: required cold-list projection keys must not be empty')
+    }
+    if (unique.has(key)) {
+      throw new Error(`api-session.list: duplicate required cold-list projection key ${JSON.stringify(key)}`)
+    }
+    unique.add(key)
+  }
+  return Object.freeze([...unique])
+}
+
 function normalizeSearchQuery(query: string): string {
   const normalized = query.trim()
   if (normalized.length === 0) {
@@ -310,6 +442,14 @@ function normalizeSearchQuery(query: string): string {
     throw new RemoteError('gateway/bad-request', 'session search query must not contain NUL', {})
   }
   return normalized
+}
+
+function matchesLiteralPhrase(value: string, query: string): boolean {
+  return value.toLowerCase().includes(query.toLowerCase())
+}
+
+function isMessageType(value: string): value is MessageSearchType {
+  return MESSAGE_TYPES.has(value as MessageSearchType)
 }
 
 function updatedAt(header: SessionHeader, metadata: SessionListMetadata | undefined): number {

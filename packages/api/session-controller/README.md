@@ -35,6 +35,10 @@ The Client adapter exposes `SessionEventStream`, a Gateway `RemoteJournalStream`
 The Session object also carries local submission echoes: `session.beginSubmission` inserts one into `SessionSnapshot.pendingSubmissions` synchronously, before the caller serializes and prompts, so a conversation UI can show the message on the submit click's own frame. The echo stores ordered image previews and durable file references. Session derives its `transcript`, `queued`, or `steering` placement from the current running state and requested delivery mode, then retains that placement while serialization is in flight. The prompt's `requestId` is the correlation identity: the Host echoes it as the durable user source's `rpcId`, and queue occurrences project it as `SessionQueuedItem.rpcId`. An echo retires one animation frame after its durable event or queue occurrence is observed, immediately when its identified prompt fails or is abandoned, and as failed on disposal. Each retirement fires `onRetire` exactly once; an observed retirement includes the ordered durable attachment references so the composer can release successful cards while preserving failed drafts. Echoes are Client memory only; reload and reconnect rebuild the conversation from durable events alone.
 
 
+Session search combines the current official title projection with current-surface user and assistant message matches. Title matches precede message matches in recent-activity order, and one Session appears once when both sources match. Each item identifies either the exact title projection cut or the matching message event. Renaming removes the previous title from subsequent searches. Results remain bounded while the controller follows message pages past duplicates.
+
+Search returns required `coverage` and `unsupported_sessions` alongside `items` and `hasMore`. The controller filters unsupported IDs by list visibility and preserves incomplete coverage even if all those IDs are withheld. Deployments with actor or tenant authorization must independently authorize every returned ID; working-directory presence does not authorize a tenant. The client forwards coverage without changing it. Title matching does not prepare, migrate, or resume unsupported Sessions.
+
 <a id="session-media-references"></a>
 ## Session media references
 
@@ -48,6 +52,7 @@ The Session object also carries local submission echoes: `session.beginSubmissio
 | Field | Default | Meaning |
 |---|---:|---|
 | `nativeOpen` | platform-detected | Whether Session workspace paths can be handed to a native desktop opener |
+| `requiredColdListProjectionKeys` | `[]` | Client-visible projection keys that every cold Session list row must provide |
 
 The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-api-session-controller) is the exhaustive source for accepted fields and their JSDoc.
 
