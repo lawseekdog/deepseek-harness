@@ -706,7 +706,11 @@ describe('WorkspaceBrowser', () => {
     try {
       const open = vi.fn()
       const searchSessions = vi.fn(async () => ({
-        items: [{ sessionId: sid('body-hit'), snippet: '…the waterfall token appears here…' }],
+        items: [{
+          sessionId: sid('body-hit'),
+          snippet: '…the waterfall token appears here…',
+          match: { kind: 'message' as const, seq: 1, type: 'user/message' as const },
+        }],
         hasMore: true,
       }))
       const b = mount({
@@ -936,18 +940,17 @@ describe('WorkspaceBrowser', () => {
   it('aborts a superseded request and ignores its stale result', async () => {
     vi.useFakeTimers()
     try {
-      let resolveFirst!: (value: {
-        items: { sessionId: SessionId; snippet: string }[]
-        hasMore: boolean
-      }) => void
-      const first = new Promise<{
-        items: { sessionId: SessionId; snippet: string }[]
-        hasMore: boolean
-      }>((resolve) => { resolveFirst = resolve })
+      type SearchValue = Awaited<ReturnType<WorkspaceBrowserProps['searchSessions']>>
+      let resolveFirst!: (value: SearchValue) => void
+      const first = new Promise<SearchValue>((resolve) => { resolveFirst = resolve })
       const searchSessions = vi.fn((query: string, _signal: AbortSignal) => query === 'first'
         ? first
         : Promise.resolve({
-          items: [{ sessionId: sid('second-hit'), snippet: 'second excerpt' }],
+          items: [{
+            sessionId: sid('second-hit'),
+            snippet: 'second excerpt',
+            match: { kind: 'message' as const, seq: 1, type: 'user/message' as const },
+          }],
           hasMore: false,
         }))
       mount({
@@ -970,7 +973,11 @@ describe('WorkspaceBrowser', () => {
 
       await act(async () => {
         resolveFirst({
-          items: [{ sessionId: sid('first-hit'), snippet: 'stale excerpt' }],
+          items: [{
+            sessionId: sid('first-hit'),
+            snippet: 'stale excerpt',
+            match: { kind: 'message', seq: 1, type: 'user/message' },
+          }],
           hasMore: false,
         })
         await Promise.resolve()

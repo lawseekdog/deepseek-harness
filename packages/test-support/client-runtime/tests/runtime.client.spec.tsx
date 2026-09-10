@@ -197,14 +197,28 @@ describe('sessions', () => {
     const signal = new AbortController().signal
     expect(runtime.sessions.searchResultLimit).toBeGreaterThan(0)
     await expect(runtime.sessions.search('marker', signal))
-      .resolves.toEqual({ ok: true, value: { items: [], hasMore: false } })
+      .resolves.toEqual({
+        ok: true,
+        value: { items: [], hasMore: false, coverage: 'complete', unsupported_sessions: [] },
+      })
     runtime.sessions.stubSearch(query => ({
-      items: [{ sessionId: 's1' as SessionId, snippet: `hit: ${query}` }],
+      items: [{
+        sessionId: 's1' as SessionId,
+        snippet: `hit: ${query}`,
+        match: { kind: 'message', seq: 1, type: 'user/message' },
+      }],
       hasMore: true,
+      coverage: 'complete',
+      unsupported_sessions: [],
     }))
     await expect(runtime.sessions.search('marker', signal)).resolves.toEqual({
       ok: true,
-      value: { items: [{ sessionId: 's1', snippet: 'hit: marker' }], hasMore: true },
+      value: {
+        items: [{ sessionId: 's1', snippet: 'hit: marker', match: { kind: 'message', seq: 1, type: 'user/message' } }],
+        hasMore: true,
+        coverage: 'complete',
+        unsupported_sessions: [],
+      },
     })
     expect(runtime.sessions.calls).toEqual([
       { method: 'search', args: ['marker', signal] },

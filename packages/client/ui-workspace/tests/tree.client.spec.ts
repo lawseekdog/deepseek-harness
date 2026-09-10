@@ -352,7 +352,10 @@ describe('deriveSearchResults archive filtering', () => {
       'needle',
       archived('gone'),
       noAttention,
-      { items: [{ sessionId: gone.id, snippet: 'needle body' }], hasMore: false },
+      {
+        items: [{ sessionId: gone.id, snippet: 'needle body', match: { kind: 'message', seq: 1, type: 'user/message' } }],
+        hasMore: false,
+      },
       10,
     )
     expect(result.items.map(item => item.id)).toEqual([hit.id])
@@ -381,10 +384,10 @@ describe('deriveSearchResults', () => {
       }]]),
       {
         items: [
-          { sessionId: contentHit.id, snippet: 'body needle excerpt' },
-          { sessionId: contentHit.id, snippet: 'ignored duplicate excerpt' },
-          { sessionId: titleHit.id, snippet: 'title session body excerpt' },
-          { sessionId: sid('unknown'), snippet: 'not in session.list' },
+          { sessionId: contentHit.id, snippet: 'body needle excerpt', match: { kind: 'message', seq: 1, type: 'user/message' } },
+          { sessionId: contentHit.id, snippet: 'ignored duplicate excerpt', match: { kind: 'message', seq: 2, type: 'user/message' } },
+          { sessionId: titleHit.id, snippet: 'title session body excerpt', match: { kind: 'message', seq: 1, type: 'user/message' } },
+          { sessionId: sid('unknown'), snippet: 'not in session.list', match: { kind: 'message', seq: 1, type: 'user/message' } },
         ],
         hasMore: false,
       },
@@ -445,8 +448,8 @@ describe('deriveSearchResults', () => {
       noAttention,
       {
         items: [
-          { sessionId: staleBlank.id, snippet: 'stale body' },
-          { sessionId: currentBlank.id, snippet: 'current body' },
+          { sessionId: staleBlank.id, snippet: 'stale body', match: { kind: 'message', seq: 1, type: 'user/message' } },
+          { sessionId: currentBlank.id, snippet: 'current body', match: { kind: 'message', seq: 1, type: 'user/message' } },
         ],
         hasMore: false,
       },
@@ -479,7 +482,10 @@ describe('deriveSearchResults', () => {
       'needle',
       noArchive,
       noAttention,
-      { items: [{ sessionId: sid('body'), snippet: 'needle' }], hasMore: true },
+      {
+        items: [{ sessionId: sid('body'), snippet: 'needle', match: { kind: 'message', seq: 1, type: 'user/message' } }],
+        hasMore: true,
+      },
       3,
     )
     expect(backendMore.items).toHaveLength(1)

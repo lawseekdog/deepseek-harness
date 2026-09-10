@@ -6,10 +6,10 @@ import {
 } from '@deepseek-ai/dsh-api-session-controller/client'
 import type {
   AgentContext, ISessions, ProjectionsFace, SessionBinding, SessionFace, SessionListState,
-  SessionEventLikeEntry, SessionLiveEventEntry, SessionSearchResultItem,
+  SessionEventLikeEntry, SessionLiveEventEntry,
   SessionSnapshot, SessionSummary, SubmissionHandle,
 } from '@deepseek-ai/dsh-api-session-controller/client'
-import type { SessionRequestId } from '@deepseek-ai/dsh-api-session-controller/types'
+import type { SessionRequestId, SessionSearchValue } from '@deepseek-ai/dsh-api-session-controller/types'
 import type { SubagentAddress } from '@deepseek-ai/dsh-subagent/client'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { ObservableSnapshot, SnapshotStore } from '@deepseek-ai/dsh-client-store'
@@ -206,7 +206,7 @@ export class TestSessions implements ISessions {
   readonly searchResultLimit = SESSION_SEARCH_RESULT_LIMIT
 
   /** Replaceable search behavior (see {@link TestSessions.stubSearch}). */
-  private searchStub: ((query: string, signal: AbortSignal) => { items: SessionSearchResultItem[]; hasMore: boolean }) | undefined
+  private searchStub: ((query: string, signal: AbortSignal) => SessionSearchValue) | undefined
   private createStub: ((opts: Parameters<ISessions['create']>[0]) => Promise<SessionId>) | undefined
 
   /**
@@ -486,24 +486,26 @@ export class TestSessions implements ISessions {
   }
 
   /**
-   * Replace the sidebar-search result page (the call is still recorded).
-   * @param impl - hits for a query, as the Host would rank them.
+   * Replace the sidebar-search result value (the call is still recorded).
+   * @param impl - the search value a query produces, as the Host would answer it.
    */
-  stubSearch(impl: (query: string, signal: AbortSignal) => { items: SessionSearchResultItem[]; hasMore: boolean }): void {
+  stubSearch(impl: (query: string, signal: AbortSignal) => SessionSearchValue): void {
     this.searchStub = impl
   }
 
   /**
    * Content search over the fixture corpus (recorded). The default answers an
-   * empty page: content ranking is Host behavior, so a scenario that asserts
-   * hits declares them through {@link TestSessions.stubSearch}.
+   * empty, complete result: content ranking is Host behavior, so a scenario
+   * that asserts hits declares them through {@link TestSessions.stubSearch}.
    * @param query - non-blank literal phrase.
    * @param signal - cancellation for a superseded search (recorded and forwarded).
-   * @returns the stubbed or empty result page.
+   * @returns the stubbed or default result value.
    */
   search(query: string, signal: AbortSignal): ReturnType<ISessions['search']> {
     this.calls.push({ method: 'search', args: [query, signal] })
-    return Promise.resolve({ ok: true, value: this.searchStub?.(query, signal) ?? { items: [], hasMore: false } })
+    const value = this.searchStub?.(query, signal)
+      ?? { items: [], hasMore: false, coverage: 'complete', unsupported_sessions: [] }
+    return Promise.resolve({ ok: true, value })
   }
 
   /**
