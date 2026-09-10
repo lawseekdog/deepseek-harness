@@ -11,3 +11,9 @@
 # Pairing records are generated from the three confirmed owner-blob pairs.
 # The worktree-local installer registers the fail-closed driver command.
 *.i18n.yaml merge=dsh-translation-pairing
+
+# Patch artifacts preserve upstream source bytes verbatim, including the
+# original indentation; provenance hashes depend on that fidelity, so the
+# whitespace gate must not normalize or flag them.
+patches/pi-ai-raw-arguments/*.patch -whitespace
+patches/dsh-history-coverage/**/*.patch -whitespace

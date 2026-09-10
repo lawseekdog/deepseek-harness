@@ -24,7 +24,7 @@ index 2e944fcd..a59b0e4e 100644
  							break;
  						case "thinking": {
 diff --git a/packages/ai/src/api/openai-completions.ts b/packages/ai/src/api/openai-completions.ts
-index 01781006..c590531a 100644
+index 8ac17dba..ca5902a9 100644
 --- a/packages/ai/src/api/openai-completions.ts
 +++ b/packages/ai/src/api/openai-completions.ts
 @@ -45,6 +45,7 @@ import { getPiUserAgent } from "../utils/pi-user-agent.ts";
@@ -35,7 +35,7 @@ index 01781006..c590531a 100644
  import {
  	appendGrammarToolInputJsonDelta,
  	createGrammarToolInputProperties,
-@@ -396,7 +397,7 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
+@@ -401,7 +402,7 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
  			const getCustomToolCallInput = (block: StreamingToolCallBlock): string => {
  				const property = block.customInput?.property;
  				if (property === undefined) return "";
@@ -44,7 +44,7 @@ index 01781006..c590531a 100644
  				return typeof value === "string" ? value : "";
  			};
  			const appendCustomToolCallInput = (
-@@ -1327,7 +1328,9 @@ export function convertMessages(
+@@ -1336,7 +1337,9 @@ export function convertMessages(
  							type: "custom",
  							custom: {
  								name: tc.name,
@@ -55,7 +55,7 @@ index 01781006..c590531a 100644
  							},
  						};
  					}
-@@ -1336,7 +1339,7 @@ export function convertMessages(
+@@ -1345,7 +1348,7 @@ export function convertMessages(
  						type: "function",
  						function: {
  							name: tc.name,
@@ -65,7 +65,7 @@ index 01781006..c590531a 100644
  					};
  				});
 diff --git a/packages/ai/src/api/openai-responses-shared.ts b/packages/ai/src/api/openai-responses-shared.ts
-index dca994a6..973f710b 100644
+index 7ac1add0..b99e5a56 100644
 --- a/packages/ai/src/api/openai-responses-shared.ts
 +++ b/packages/ai/src/api/openai-responses-shared.ts
 @@ -30,8 +30,12 @@ import type {
@@ -129,7 +129,7 @@ index dca994a6..973f710b 100644
  			};
  			output.content.push(block);
  			const slot = {
-@@ -651,16 +654,16 @@ export async function processResponsesStream<TApi extends Api>(
+@@ -652,16 +655,16 @@ export async function processResponsesStream<TApi extends Api>(
  			});
  		} else if (event.type === "response.function_call_arguments.delta") {
  			const slot = getSlot(event.output_index, "toolCall");
@@ -153,7 +153,7 @@ index dca994a6..973f710b 100644
  
  			if (event.arguments.startsWith(previousPartialJson)) {
  				const delta = event.arguments.slice(previousPartialJson.length);
-@@ -708,13 +711,11 @@ export async function processResponsesStream<TApi extends Api>(
+@@ -709,13 +712,11 @@ export async function processResponsesStream<TApi extends Api>(
  			} else if (
  				item.type === "function_call" &&
  				slot?.type === "toolCall" &&
@@ -220,10 +220,10 @@ index 45e90a09..6ff7d5ae 100644
  					}
  
 diff --git a/packages/ai/src/index.ts b/packages/ai/src/index.ts
-index 82bac973..d44a09eb 100644
+index 8cbeee73..e4a9fff0 100644
 --- a/packages/ai/src/index.ts
 +++ b/packages/ai/src/index.ts
-@@ -42,6 +42,7 @@ export * from "./utils/json-parse.ts";
+@@ -43,6 +43,7 @@ export * from "./utils/json-parse.ts";
  export * from "./utils/overflow.ts";
  export * from "./utils/retry.ts";
  export { contentText } from "./utils/text.ts";
@@ -232,10 +232,10 @@ index 82bac973..d44a09eb 100644
  export { uuidv7 } from "./utils/uuid.ts";
  export * from "./utils/validation.ts";
 diff --git a/packages/ai/src/types.ts b/packages/ai/src/types.ts
-index a17e3b77..d0d39b5f 100644
+index fe318fe4..87402ffe 100644
 --- a/packages/ai/src/types.ts
 +++ b/packages/ai/src/types.ts
-@@ -373,7 +373,10 @@ export interface ToolCall {
+@@ -374,7 +374,10 @@ export interface ToolCall {
  	type: "toolCall";
  	id: string;
  	name: string;
@@ -247,6 +247,123 @@ index a17e3b77..d0d39b5f 100644
  	thoughtSignature?: string; // Google-specific: opaque signature for reusing thought context
  	/** OpenAI Responses namespace for calls to dynamically loaded or namespaced tools. */
  	namespace?: string;
+diff --git a/packages/ai/src/utils/assistant-message-frame.ts b/packages/ai/src/utils/assistant-message-frame.ts
+index 65e23ede..65dd7d55 100644
+--- a/packages/ai/src/utils/assistant-message-frame.ts
++++ b/packages/ai/src/utils/assistant-message-frame.ts
+@@ -1,5 +1,6 @@
+ import type { AssistantMessage, AssistantMessageEvent, TextContent, ThinkingContent, ToolCall } from "../types.ts";
+ import { parseStreamingJson } from "./json-parse.ts";
++import { parseToolCallArguments } from "./tool-arguments.ts";
+ 
+ /**
+  * Compact, replayable assistant-message progress. Terminal settlement is
+@@ -28,6 +29,8 @@ export type AssistantMessageFrame =
+ 			id: string;
+ 			name: string;
+ 			arguments: ToolCall["arguments"];
++			/** Exact provider JSON text, authoritative for function-call replay when present. */
++			rawArguments?: string;
+ 			thoughtSignature?: string;
+ 			namespace?: string;
+ 	  };
+@@ -69,6 +72,7 @@ function cloneToolCall(toolCall: ToolCall): ToolCall {
+ 		id: toolCall.id,
+ 		name: toolCall.name,
+ 		arguments: structuredClone(toolCall.arguments),
++		...(toolCall.rawArguments === undefined ? {} : { rawArguments: toolCall.rawArguments }),
+ 		...(toolCall.thoughtSignature === undefined ? {} : { thoughtSignature: toolCall.thoughtSignature }),
+ 		...(toolCall.namespace === undefined ? {} : { namespace: toolCall.namespace }),
+ 	};
+@@ -106,7 +110,8 @@ function eventBlock(event: Exclude<AssistantMessageEvent, { type: "start" | "don
+ 	return block;
+ }
+ 
+-function serializedArguments(argumentsValue: ToolCall["arguments"]): string {
++function serializedArguments(argumentsValue: ToolCall["arguments"]): string | undefined {
++	if (argumentsValue === undefined) return undefined;
+ 	const serialized = JSON.stringify(argumentsValue);
+ 	if (serialized === undefined) throw new Error("Tool-call arguments are not JSON-serializable");
+ 	return serialized;
+@@ -225,8 +230,11 @@ export class AssistantMessageFrameEncoder {
+ 				if (content.type !== "toolCall") {
+ 					throw new Error(`toolcall_start event points to ${content.type} block at index ${event.contentIndex}`);
+ 				}
+-				const snapshotArguments = serializedArguments(content.arguments);
+-				const caughtUp = snapshotArguments === EMPTY_PARSED_TOOL_ARGUMENTS;
++				// A strict parse reports no object while provider text is incomplete or malformed.
++				// That is an empty start snapshot: no parsed value is visible, so every delta
++				// replays verbatim and the raw text stays authoritative.
++				const snapshotArguments = serializedArguments(content.arguments) ?? "";
++				const caughtUp = snapshotArguments === "" || snapshotArguments === EMPTY_PARSED_TOOL_ARGUMENTS;
+ 				this.startBlock(event.contentIndex, {
+ 					kind: "toolCall",
+ 					caughtUp,
+@@ -275,6 +283,7 @@ export class AssistantMessageFrameEncoder {
+ 					id: event.toolCall.id,
+ 					name: event.toolCall.name,
+ 					arguments: structuredClone(event.toolCall.arguments),
++					...(event.toolCall.rawArguments === undefined ? {} : { rawArguments: event.toolCall.rawArguments }),
+ 					...(event.toolCall.thoughtSignature === undefined
+ 						? {}
+ 						: { thoughtSignature: event.toolCall.thoughtSignature }),
+@@ -325,6 +334,20 @@ export class AssistantMessageFrameEncoder {
+ 	}
+ }
+ 
++/**
++ * Apply streamed JSON text to one replayed tool call. Calls that carry authoritative
++ * provider text stay byte-exact and strictly parsed; calls without it keep the lenient
++ * streaming-progress parse.
++ */
++function applyToolCallJson(block: ToolCall, json: string): void {
++	if (block.rawArguments === undefined) {
++		block.arguments = parseStreamingJson<ToolCall["arguments"]>(json);
++		return;
++	}
++	block.rawArguments = json;
++	block.arguments = parseToolCallArguments(json);
++}
++
+ function appendBlock(
+ 	message: AssistantMessage,
+ 	states: Map<number, ReducerBlockState>,
+@@ -451,7 +474,7 @@ export function reduceAssistantMessageFrames(frames: Iterable<AssistantMessageFr
+ 					throw new Error("Unreachable tool-call checkpoint state");
+ 				}
+ 				state.json = frame.json;
+-				block.arguments = parseStreamingJson<ToolCall["arguments"]>(frame.json);
++				applyToolCallJson(block, frame.json);
+ 				break;
+ 			}
+ 			case "toolcall_delta": {
+@@ -460,6 +483,7 @@ export function reduceAssistantMessageFrames(frames: Iterable<AssistantMessageFr
+ 					throw new Error("Unreachable tool-call frame state");
+ 				}
+ 				state.json += frame.delta;
++				if (block.rawArguments !== undefined) applyToolCallJson(block, block.rawArguments + frame.delta);
+ 				break;
+ 			}
+ 			case "toolcall_end": {
+@@ -468,6 +492,8 @@ export function reduceAssistantMessageFrames(frames: Iterable<AssistantMessageFr
+ 				block.id = frame.id;
+ 				block.name = frame.name;
+ 				block.arguments = structuredClone(frame.arguments);
++				delete block.rawArguments;
++				if (frame.rawArguments !== undefined) block.rawArguments = frame.rawArguments;
+ 				delete block.thoughtSignature;
+ 				delete block.namespace;
+ 				if (frame.thoughtSignature !== undefined) block.thoughtSignature = frame.thoughtSignature;
+@@ -483,7 +509,8 @@ export function reduceAssistantMessageFrames(frames: Iterable<AssistantMessageFr
+ 		if (state.kind !== "toolCall" || state.ended || state.json.length === 0) continue;
+ 		const block = message.content[contentIndex];
+ 		if (block?.type !== "toolCall") throw new Error("Unreachable tool-call frame state");
+-		block.arguments = parseStreamingJson<ToolCall["arguments"]>(state.json);
++		// Calls that carry raw text were already kept strictly in sync by checkpoints and deltas.
++		if (block.rawArguments === undefined) block.arguments = parseStreamingJson<ToolCall["arguments"]>(state.json);
+ 	}
+ 
+ 	return message;
 diff --git a/packages/ai/src/utils/estimate.ts b/packages/ai/src/utils/estimate.ts
 index b434969e..a879f514 100644
 --- a/packages/ai/src/utils/estimate.ts
@@ -260,126 +377,6 @@ index b434969e..a879f514 100644
  		}
  	}
  	return Math.ceil(chars / CHARS_PER_TOKEN);
-diff --git a/packages/ai/src/utils/validation.ts b/packages/ai/src/utils/validation.ts
-index cf6902df..11a03683 100644
---- a/packages/ai/src/utils/validation.ts
-+++ b/packages/ai/src/utils/validation.ts
-@@ -2,6 +2,7 @@ import { Compile } from "typebox/compile";
- import type { TLocalizedValidationError } from "typebox/error";
- import { Value } from "typebox/value";
- import type { Tool, ToolCall } from "../types.ts";
-+import { requireToolCallArguments } from "./tool-arguments.ts";
- 
- const validatorCache = new WeakMap<object, ReturnType<typeof Compile>>();
- const TYPEBOX_KIND = Symbol.for("TypeBox.Kind");
-@@ -315,7 +316,7 @@ export function validateToolCall(tools: Tool[], toolCall: ToolCall): any {
-  * @throws Error with formatted message if validation fails
-  */
- export function validateToolArguments(tool: Tool, toolCall: ToolCall): any {
--	const args = structuredClone(toolCall.arguments);
-+	const args = structuredClone(requireToolCallArguments(toolCall));
- 	normalizeOptionalNulls(args, tool.parameters as JsonSchemaObject);
- 	Value.Convert(tool.parameters, args);
- 
-diff --git a/packages/ai/test/stream.test.ts b/packages/ai/test/stream.test.ts
-index 2fe1604a..b2ea95b0 100644
---- a/packages/ai/test/stream.test.ts
-+++ b/packages/ai/test/stream.test.ts
-@@ -303,6 +303,7 @@ async function multiTurn<TApi extends Api>(model: Model<TApi>, options?: StreamO
- 				expect(block.name).toBe("math_operation");
- 				expect(block.id).toBeTruthy();
- 				expect(block.arguments).toBeTruthy();
-+				if (block.arguments === undefined) throw new Error("Expected complete math_operation arguments");
- 
- 				const { a, b, operation } = block.arguments;
- 				let result: number;
-diff --git a/packages/coding-agent/examples/extensions/subagent/index.ts b/packages/coding-agent/examples/extensions/subagent/index.ts
-index 71b1a33d..9182f828 100644
---- a/packages/coding-agent/examples/extensions/subagent/index.ts
-+++ b/packages/coding-agent/examples/extensions/subagent/index.ts
-@@ -18,7 +18,7 @@ import * as os from "node:os";
- import * as path from "node:path";
- import type { AgentToolResult, ThinkingLevel } from "@earendil-works/pi-agent-core";
- import type { Message } from "@earendil-works/pi-ai";
--import { StringEnum } from "@earendil-works/pi-ai";
-+import { StringEnum, serializeToolCallArguments } from "@earendil-works/pi-ai";
- import {
- 	CONFIG_DIR_NAME,
- 	type ExtensionAPI,
-@@ -209,7 +209,11 @@ function getDisplayItems(messages: Message[]): DisplayItem[] {
- 		if (msg.role === "assistant") {
- 			for (const part of msg.content) {
- 				if (part.type === "text") items.push({ type: "text", text: part.text });
--				else if (part.type === "toolCall") items.push({ type: "toolCall", name: part.name, args: part.arguments });
-+				else if (part.type === "toolCall") {
-+					if (part.arguments === undefined)
-+						items.push({ type: "text", text: `${part.name}: ${serializeToolCallArguments(part)}` });
-+					else items.push({ type: "toolCall", name: part.name, args: part.arguments });
-+				}
- 			}
- 		}
- 	}
-diff --git a/packages/evals/src/pi-harness.ts b/packages/evals/src/pi-harness.ts
-index a1cad3e1..a3a5c956 100644
---- a/packages/evals/src/pi-harness.ts
-+++ b/packages/evals/src/pi-harness.ts
-@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
- import { tmpdir } from "node:os";
- import { join } from "node:path";
- import { performance } from "node:perf_hooks";
--import { contentText } from "@earendil-works/pi-ai";
-+import { contentText, requireToolCallArguments } from "@earendil-works/pi-ai";
- import {
- 	type AgentSession,
- 	type CreateAgentSessionOptions,
-@@ -69,7 +69,7 @@ function toTranscriptEvents(messages: AgentSession["messages"]): TranscriptEvent
- 						type: "tool_call",
- 						id: part.id,
- 						name: part.name,
--						arguments: normalizeRecord(part.arguments),
-+						arguments: normalizeRecord(requireToolCallArguments(part)),
- 					});
- 				}
- 			}
-diff --git a/packages/server/src/protocol.ts b/packages/server/src/protocol.ts
-index 069828e5..4bad50ed 100644
---- a/packages/server/src/protocol.ts
-+++ b/packages/server/src/protocol.ts
-@@ -7,6 +7,7 @@ import {
- 	getSupportedThinkingLevels,
- 	type Model,
- 	type ModelThinkingLevel,
-+	requireToolCallArguments,
- 	type ToolCall,
- 	type ToolResultMessage,
- 	type UserMessage,
-@@ -44,7 +45,7 @@ type _AiThinkingContentFieldsAccountedFor = Assert<
- >;
- type _AiImageContentFieldsAccountedFor = Assert<ExactKeys<AiImageContent, "type" | "data" | "mimeType">>;
- type _AiToolCallFieldsAccountedFor = Assert<
--	ExactKeys<ToolCall, "type" | "id" | "name" | "arguments" | "thoughtSignature" | "namespace">
-+	ExactKeys<ToolCall, "type" | "id" | "name" | "arguments" | "rawArguments" | "thoughtSignature" | "namespace">
- >;
- type _AiUsageFieldsAccountedFor = Assert<
- 	ExactKeys<
-@@ -270,7 +271,7 @@ function toProtocolAssistantContent(message: AssistantMessage): AssistantTranscr
- 					type: "toolCall",
- 					toolCallId: identifier(part.id, "Tool call id"),
- 					toolName: identifier(part.name, "Tool call name"),
--					input: toProtocolJsonValue(part.arguments),
-+					input: toProtocolJsonValue(requireToolCallArguments(part)),
- 				};
- 			default: {
- 				const exhaustive: never = part;
-@@ -370,7 +371,7 @@ export function toProtocolToolResultMessage(
- 		role: "tool",
- 		toolCallId: callId,
- 		toolName: callName,
--		input: toProtocolJsonValue(options.call.arguments),
-+		input: toProtocolJsonValue(requireToolCallArguments(options.call)),
- 		content: toProtocolToolContent(message.content),
- 		...(details === undefined ? {} : { details }),
- 		...(usage ? { usage } : {}),
 diff --git a/packages/ai/src/utils/tool-arguments.ts b/packages/ai/src/utils/tool-arguments.ts
 new file mode 100644
 index 00000000..9422528d
@@ -415,6 +412,52 @@ index 00000000..9422528d
 +	if (toolCall.rawArguments !== undefined) return toolCall.rawArguments;
 +	return JSON.stringify(requireToolCallArguments(toolCall));
 +}
+diff --git a/packages/ai/src/utils/validation.ts b/packages/ai/src/utils/validation.ts
+index cf6902df..11a03683 100644
+--- a/packages/ai/src/utils/validation.ts
++++ b/packages/ai/src/utils/validation.ts
+@@ -2,6 +2,7 @@ import { Compile } from "typebox/compile";
+ import type { TLocalizedValidationError } from "typebox/error";
+ import { Value } from "typebox/value";
+ import type { Tool, ToolCall } from "../types.ts";
++import { requireToolCallArguments } from "./tool-arguments.ts";
+ 
+ const validatorCache = new WeakMap<object, ReturnType<typeof Compile>>();
+ const TYPEBOX_KIND = Symbol.for("TypeBox.Kind");
+@@ -315,7 +316,7 @@ export function validateToolCall(tools: Tool[], toolCall: ToolCall): any {
+  * @throws Error with formatted message if validation fails
+  */
+ export function validateToolArguments(tool: Tool, toolCall: ToolCall): any {
+-	const args = structuredClone(toolCall.arguments);
++	const args = structuredClone(requireToolCallArguments(toolCall));
+ 	normalizeOptionalNulls(args, tool.parameters as JsonSchemaObject);
+ 	Value.Convert(tool.parameters, args);
+ 
+diff --git a/packages/ai/test/assistant-message-frame.test.ts b/packages/ai/test/assistant-message-frame.test.ts
+index ab7f5f9a..d4b891dd 100644
+--- a/packages/ai/test/assistant-message-frame.test.ts
++++ b/packages/ai/test/assistant-message-frame.test.ts
+@@ -528,6 +528,7 @@ describe("assistant message frames", () => {
+ 		const toolStart = frame(encoder, { type: "toolcall_start", contentIndex: 0, partial });
+ 		const sourceTool = partial.content[0];
+ 		if (sourceTool?.type !== "toolCall") throw new Error("Expected source tool call");
++		if (sourceTool.arguments === undefined) throw new Error("Expected parsed source arguments");
+ 		(sourceTool.arguments.nested as Record<string, unknown>).value = "mutated";
+ 
+ 		const reduced = reduceAssistantMessageFrames([start, toolStart]);
+@@ -536,8 +537,11 @@ describe("assistant message frames", () => {
+ 		expect(reduced?.content[0]).toMatchObject({ arguments: { nested: { value: "original" } } });
+ 
+ 		if (reduced?.content[0]?.type !== "toolCall") throw new Error("Expected reduced tool call");
++		if (reduced.content[0].arguments === undefined) throw new Error("Expected parsed reduced arguments");
+ 		reduced.content[0].arguments.nested = "changed-output";
+-		expect(toolStart.type === "toolcall_start" && toolStart.toolCall.arguments.nested).toEqual({
++		if (toolStart.type !== "toolcall_start") throw new Error("Expected tool-call start frame");
++		if (toolStart.toolCall.arguments === undefined) throw new Error("Expected parsed frame arguments");
++		expect(toolStart.toolCall.arguments.nested).toEqual({
+ 			value: "original",
+ 		});
+ 	});
 diff --git a/packages/ai/test/openai-responses-raw-arguments.test.ts b/packages/ai/test/openai-responses-raw-arguments.test.ts
 new file mode 100644
 index 00000000..31971daa
@@ -636,3 +679,63 @@ index 00000000..31971daa
 +		expect(parseToolCallArguments("{}")).toEqual({});
 +	});
 +});
+diff --git a/packages/ai/test/stream.test.ts b/packages/ai/test/stream.test.ts
+index 2fe1604a..b2ea95b0 100644
+--- a/packages/ai/test/stream.test.ts
++++ b/packages/ai/test/stream.test.ts
+@@ -303,6 +303,7 @@ async function multiTurn<TApi extends Api>(model: Model<TApi>, options?: StreamO
+ 				expect(block.name).toBe("math_operation");
+ 				expect(block.id).toBeTruthy();
+ 				expect(block.arguments).toBeTruthy();
++				if (block.arguments === undefined) throw new Error("Expected complete math_operation arguments");
+ 
+ 				const { a, b, operation } = block.arguments;
+ 				let result: number;
+diff --git a/packages/coding-agent/examples/extensions/subagent/index.ts b/packages/coding-agent/examples/extensions/subagent/index.ts
+index 71b1a33d..9182f828 100644
+--- a/packages/coding-agent/examples/extensions/subagent/index.ts
++++ b/packages/coding-agent/examples/extensions/subagent/index.ts
+@@ -18,7 +18,7 @@ import * as os from "node:os";
+ import * as path from "node:path";
+ import type { AgentToolResult, ThinkingLevel } from "@earendil-works/pi-agent-core";
+ import type { Message } from "@earendil-works/pi-ai";
+-import { StringEnum } from "@earendil-works/pi-ai";
++import { StringEnum, serializeToolCallArguments } from "@earendil-works/pi-ai";
+ import {
+ 	CONFIG_DIR_NAME,
+ 	type ExtensionAPI,
+@@ -209,7 +209,11 @@ function getDisplayItems(messages: Message[]): DisplayItem[] {
+ 		if (msg.role === "assistant") {
+ 			for (const part of msg.content) {
+ 				if (part.type === "text") items.push({ type: "text", text: part.text });
+-				else if (part.type === "toolCall") items.push({ type: "toolCall", name: part.name, args: part.arguments });
++				else if (part.type === "toolCall") {
++					if (part.arguments === undefined)
++						items.push({ type: "text", text: `${part.name}: ${serializeToolCallArguments(part)}` });
++					else items.push({ type: "toolCall", name: part.name, args: part.arguments });
++				}
+ 			}
+ 		}
+ 	}
+diff --git a/packages/evals/src/pi-harness.ts b/packages/evals/src/pi-harness.ts
+index a1cad3e1..a3a5c956 100644
+--- a/packages/evals/src/pi-harness.ts
++++ b/packages/evals/src/pi-harness.ts
+@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+ import { tmpdir } from "node:os";
+ import { join } from "node:path";
+ import { performance } from "node:perf_hooks";
+-import { contentText } from "@earendil-works/pi-ai";
++import { contentText, requireToolCallArguments } from "@earendil-works/pi-ai";
+ import {
+ 	type AgentSession,
+ 	type CreateAgentSessionOptions,
+@@ -69,7 +69,7 @@ function toTranscriptEvents(messages: AgentSession["messages"]): TranscriptEvent
+ 						type: "tool_call",
+ 						id: part.id,
+ 						name: part.name,
+-						arguments: normalizeRecord(part.arguments),
++						arguments: normalizeRecord(requireToolCallArguments(part)),
+ 					});
+ 				}
+ 			}

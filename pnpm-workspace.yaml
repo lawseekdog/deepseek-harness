@@ -19,6 +19,7 @@ packages:
 linkWorkspacePackages: true
 
 overrides:
+  '@earendil-works/pi-ai': 0.85.1
   '@deepseek-ai/cosmokit': 'link:vendor/cosmokit'
   '@deepseek-ai/schemastery': 'link:vendor/schemastery'
 
@@ -86,3 +87,4 @@ minimumReleaseAgeExclude:
 patchedDependencies:
   '@yao-pkg/pkg@6.21.0': patches/@yao-pkg__pkg@6.21.0.patch
   node-pty@1.2.0-beta.15: patches/node-pty@1.2.0-beta.15.patch
+  '@earendil-works/pi-ai@0.85.1': patches/pi-ai-raw-arguments/pi-ai-0.85.1.patch
